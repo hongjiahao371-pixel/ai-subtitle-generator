@@ -11,6 +11,14 @@ depend_fw_version: 1.0.0
 depend_docker_version: 1.20.0
 allow_add_access_path: true
 open_type: tab
+privacy_policy_link:
+  - https://github.com/hongjiahao371-pixel/ai-subtitle-generator/blob/main/PRIVACY.md
+license_agreement_link:
+  - https://github.com/hongjiahao371-pixel/ai-subtitle-generator/blob/main/TERMS.md
+source_code_link:
+  - https://github.com/hongjiahao371-pixel/ai-subtitle-generator
+technical_support_link:
+  - https://github.com/hongjiahao371-pixel/ai-subtitle-generator/issues
 port: 9000
 parameters:
   - key: MEDIA_DIR
