@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+ocr-models/*.onnx
+*.gguf
+data/
+uploads/
+subtitles/
+audio/
+models/

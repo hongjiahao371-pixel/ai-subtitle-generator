@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#FAF7F2" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#1A1614" media="(prefers-color-scheme: dark)">
+    <title>AI 字幕生成器</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=20261011-r4.1">
+    <link rel="icon" href="/favicon.ico" type="image/svg+xml">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="header-content">
+                <div class="header-title">
+                    <h1>AI 字幕生成器</h1>
+                    <p class="subtitle">基于 Whisper 的本地语音识别 · 完全离线 · 隐私安全</p>
+                </div>
+                <div class="header-controls">
+                    <button class="btn btn-secondary btn-small" onclick="showSystemInfo()" title="系统信息">
+                        系统
+                    </button>
+                    <button class="btn btn-secondary btn-small" onclick="showHistory()" title="处理历史">
+                        历史
+                    </button>
+                    <button class="btn btn-secondary btn-small" onclick="showQueue()" title="任务队列">
+                        队列
+                    </button>
+                    <button class="btn btn-secondary btn-small" onclick="showMediaLibrary()" title="已上传的媒体文件">
+                        媒体库
+                    </button>
+                    <button class="btn btn-secondary btn-small" onclick="showTools()" title="工具">
+                        工具
+                    </button>
+                    <button class="btn btn-secondary btn-small" onclick="showTokenSettings()" title="访问令牌">
+                        Token
+                    </button>
+                    <!-- 2026-06-22 新增：提取字幕（仅当在 NAS 文件区点了带字幕视频时才用）-->
+                    <!-- 此按钮只在弹层里出现，不放 nav -->
+
+                
+                    <button class="btn btn-secondary btn-small" onclick="toggleTheme()" title="切换主题">
+                        <span id="themeIcon">🌙</span> <span id="themeText">深色</span>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <main>
+            <section class="upload-section">
+                <h2 class="section-title"><span class="step-num">1</span>选择视频或音频</h2>
+
+                <div class="source-selector">
+                    <label class="radio-label">
+                        <input type="radio" name="source" value="upload" checked onchange="toggleSource()">
+                        <span>上传文件</span>
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="source" value="batch" onchange="toggleSource()">
+                        <span>批量上传</span>
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="source" value="nas" onchange="toggleSource()">
+                        <span>NAS文件</span>
+                    </label>
+                </div>
+
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-icon">📁</div>
+                    <p>点击或拖拽文件到此处</p>
+                    <p class="upload-hint">视频: MP4, AVI, MKV, MOV, WMV, FLV, WebM &nbsp;|&nbsp; 音频: MP3, WAV, FLAC, AAC, OGG, M4A</p>
+                    <input type="file" id="fileInput" accept="video/*,audio/*" style="display:none">
+                </div>
+
+                <div class="batch-upload-section" id="batchUploadSection" style="display:none">
+                    <div class="upload-area" id="batchUploadArea">
+                        <div class="upload-icon">📁📁</div>
+                        <p>点击或拖拽多个文件到此处</p>
+                        <p class="upload-hint">视频/音频文件 · 最多 20 个 · 单个最大 8GB</p>
+                        <input type="file" id="batchFileInput" accept="video/*,audio/*" multiple style="display:none">
+                    </div>
+                    <div class="batch-file-list" id="batchFileList" style="display:none">
+                        <div class="batch-file-list-header">
+                            <span>待上传列表</span>
+                            <button class="btn btn-secondary btn-small" onclick="clearBatchFiles()">清空</button>
+                        </div>
+                        <div class="batch-file-items" id="batchFileItems"></div>
+                        <button class="btn btn-primary" onclick="uploadBatchFiles()">开始上传</button>
+                    </div>
+                    <div class="upload-progress" id="batchUploadProgress" style="display:none">
+                        <div class="progress-bar"><div class="progress-fill" id="batchUploadProgressFill"></div></div>
+                        <p id="batchProgressText">准备上传...</p>
+                    </div>
+                </div>
+
+                <div class="nas-file-section" id="nasPathSection" style="display:none">
+                    <div class="nas-file-browser" id="fileBrowser">
+                        <div class="nas-file-header">
+                            <span id="nasCurrentPath">NAS 文件浏览</span>
+                            <input type="text" id="nasSearchInput" placeholder="搜索" style="max-width:180px">
+                            <label class="checkbox-label compact"><input type="checkbox" id="nasRecursive"> <span>递归</span></label>
+                            <button class="btn btn-secondary btn-small" onclick="goNasParent()">上级</button>
+                            <button class="btn btn-secondary btn-small" onclick="listNasFiles()">刷新</button>
+                            <button class="btn btn-primary btn-small" onclick="generateCurrentFolder()">处理当前目录</button>
+                        </div>
+                        <div class="nas-file-list" id="fileList">
+                            <div class="empty-state"><p>点击"刷新"加载文件列表</p></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="upload-progress" id="uploadProgress" style="display:none">
+                    <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+                    <p id="progressText">准备上传...</p>
+                </div>
+            </section>
+
+            <section class="settings-section">
+                <h2 class="section-title"><span class="step-num">2</span>生成设置</h2>
+                <div class="settings-grid">
+                    <div class="setting-item">
+                        <label for="modelSelect">模型大小</label>
+                        <select id="modelSelect">
+                            <option value="tiny">Tiny (最快)</option>
+                            <option value="base">Base (平衡)</option>
+                            <option value="small">Small (较准)</option>
+                            <option value="medium">Medium (准确)</option>
+                            <option value="large" selected>Large V3 (高精度·较慢)</option>
+                            <option value="large-v3-turbo">Turbo (速度优先)</option>
+                        </select>
+                    </div>
+                    <div class="setting-item">
+                        <label for="languageSelect">语言</label>
+                        <select id="languageSelect">
+                            <option value="auto" selected>自动检测</option>
+                            <option value="zh">中文</option>
+                            <option value="en">英语</option>
+                            <option value="ja">日语</option>
+                            <option value="ko">韩语</option>
+                            <option value="es">西班牙语</option>
+                            <option value="fr">法语</option>
+                            <option value="de">德语</option>
+                        </select>
+                    </div>
+                    <div class="setting-item">
+                        <label for="formatSelect">字幕格式</label>
+                        <select id="formatSelect">
+                            <option value="srt">SRT 字幕</option>
+                            <option value="vtt">VTT 字幕</option>
+                            <option value="json">JSON 数据</option>
+                            <option value="txt">纯文本 TXT</option>
+                            <option value="ass">ASS 字幕</option>
+                            <option value="all">全部格式</option>
+                        </select>
+                    </div>
+                    <div class="setting-item">
+                        <label for="translateSelect">翻译为</label>
+                        <select id="translateSelect">
+                            <option value="" selected>不翻译</option>
+                            <option value="zh">中文</option>
+                            <option value="en">英语</option>
+                            <option value="ja">日语</option>
+                            <option value="ko">韩语</option>
+                            <option value="fr">法语</option>
+                            <option value="de">德语</option>
+                            <option value="es">西班牙语</option>
+                        </select>
+                    </div>
+                    <div class="setting-item">
+                        <label for="saveStrategySelect">保存位置</label>
+                        <select id="saveStrategySelect">
+                            <option value="subtitles" selected>字幕目录</option>
+                            <option value="source">源文件目录</option>
+                        </select>
+                    </div>
+                    <div class="setting-item">
+                        <label for="outputNamingSelect">命名</label>
+                        <select id="outputNamingSelect">
+                            <option value="plain" selected>视频名.srt</option>
+                            <option value="language">视频名.语言.srt</option>
+                            <option value="bilingual">视频名.原语-目标.srt</option>
+                        </select>
+                    </div>
+                    <div class="setting-item">
+                        <label for="splitMaxChars">自动断句字数</label>
+                        <input type="number" id="splitMaxChars" value="42" min="0" max="200">
+                    </div>
+                    <div class="setting-item checkbox-pair">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="saveToSourceDir">
+                            <span>字幕保存到源文件目录</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="bilingualSubtitle">
+                            <span>双语字幕（每种语言最多两行）</span>
+                        </label>
+                    </div>
+                    <div class="setting-item checkbox-pair">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="diarizeToggle" onchange="document.getElementById('numSpeakersPair').style.display=this.checked?'flex':'none'">
+                            <span>说话人分离（[说话人N] 前缀）</span>
+                        </label>
+                        <label class="checkbox-label" id="numSpeakersPair" style="display:none">
+                            人数
+                            <select id="numSpeakersSelect" style="margin-left:6px">
+                                <option value="0" selected>自动</option>
+                                <option value="2">2 人</option>
+                                <option value="3">3 人</option>
+                                <option value="4">4 人</option>
+                                <option value="5">5 人</option>
+                                <option value="6">6 人</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div class="setting-item" style="grid-column: 1 / -1">
+                        <label for="glossaryText">术语表</label>
+                        <textarea id="glossaryText" rows="3" placeholder="OpenAI=OpenAI&#10;Whisper=Whisper"></textarea>
+                    </div>
+                </div>
+            </section>
+
+            <section class="actions-section">
+                <button id="generateBtn" class="btn btn-primary btn-large" disabled>
+                    生成字幕
+                </button>
+                <button id="cancelBtn" class="btn btn-danger" style="display:none" onclick="cancelGeneration()">
+                    取消
+                </button>
+            </section>
+
+            <section class="status-section" id="statusSection" style="display:none">
+                <h2 class="section-title">处理状态</h2>
+                <div class="status-card processing">
+                    <div class="status-header">
+                        <span class="status-icon" id="statusIcon">&#x23F3;</span>
+                        <span class="status-text" id="statusText">处理中...</span>
+                    </div>
+                    <div class="status-details" id="statusDetails"></div>
+                    <div class="progress-container" id="progressContainer" style="display:none">
+                        <div class="progress-label">
+                            <span id="progressLabel">进度</span>
+                            <span id="progressPercent">0%</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="statusProgressFill" style="transition: width 0.4s ease-out"></div>
+                        </div>
+                        <div class="progress-info" id="progressInfo"></div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="batch-status-section" id="batchStatusSection" style="display:none">
+                <h2 class="section-title">批量状态</h2>
+                <div class="batch-status-overview">
+                    <div class="batch-progress-summary">
+                        <span class="batch-progress-label">总体进度</span>
+                        <span class="batch-progress-percent" id="batchProgressPercent">0%</span>
+                    </div>
+                    <div class="batch-progress-bar">
+                        <div class="batch-progress-fill" id="batchProgressFill"></div>
+                    </div>
+                    <div class="batch-stats" id="batchStats">
+                        <span class="stat-item">处理中: <strong id="batchStatProcessing">0</strong></span>
+                        <span class="stat-item">已完成: <strong id="batchStatCompleted">0</strong></span>
+                        <span class="stat-item">失败: <strong id="batchStatFailed">0</strong></span>
+                    </div>
+                </div>
+                <div class="batch-tasks-list" id="batchTasksList"></div>
+            </section>
+
+            <section class="subtitles-section">
+                <h2 class="section-title"><span class="step-num">3</span>生成结果</h2>
+
+                <div class="time-offset-section" id="timeOffsetSection">
+                    <label>全局时间偏移:</label>
+                    <input type="number" class="time-offset-input" id="timeOffsetValue" value="0" step="0.1" placeholder="秒">
+                    <button class="btn btn-secondary btn-small" onclick="applyTimeOffsetToAll()">应用到所有字幕</button>
+                    <span style="font-size:0.8rem;color:var(--text-muted)">正数=延后，负数=提前</span>
+                </div>
+
+                <div class="subtitle-toolbar">
+                    <input type="text" class="subtitle-search" id="subtitleSearch" placeholder="搜索字幕...">
+                    <select id="subtitleSort">
+                        <option value="created_desc">时间 (新→旧)</option>
+                        <option value="created_asc">时间 (旧→新)</option>
+                        <option value="name_asc">名称 (A→Z)</option>
+                        <option value="name_desc">名称 (Z→A)</option>
+                        <option value="size_desc">大小 (大→小)</option>
+                        <option value="size_asc">大小 (小→大)</option>
+                    </select>
+                </div>
+
+                <div class="subtitles-list" id="subtitlesList">
+                    <div class="empty-state">
+                        <div class="empty-icon">🎬</div>
+                        <p>还没有生成的字幕</p>
+                        <div class="onboarding-steps">
+                            <div class="onboarding-step">
+                                <div class="step-number">1</div>
+                                <h4>上传视频/音频</h4>
+                                <p>点击或拖拽文件到上方区域</p>
+                            </div>
+                            <div class="onboarding-step">
+                                <div class="step-number">2</div>
+                                <h4>选择设置</h4>
+                                <p>模型大小、语言、输出格式</p>
+                            </div>
+                            <div class="onboarding-step">
+                                <div class="step-number">3</div>
+                                <h4>生成字幕</h4>
+                                <p>点击按钮，字幕自动保存到列表中</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>AI 字幕生成器 · 基于 faster-whisper · 本地运行 · 数据不上传</p>
+        </footer>
+    </div>
+
+    <!-- 字幕编辑器模态框 -->
+    <div class="modal" id="subtitleEditorModal">
+        <div class="modal-content" style="max-width:1100px">
+            <div class="modal-header">
+                <h3 id="editorTitle">字幕编辑器</h3>
+                <button class="btn-close" onclick="closeSubtitleEditor()">&times;</button>
+            </div>
+            <div class="modal-body" style="padding:0">
+                <div class="editor-layout">
+                    <div class="editor-video-panel" id="editorVideoPanel">
+                        <div class="editor-video-placeholder" id="videoPlaceholder">
+                            <div class="placeholder-icon">🎬</div>
+                            <p style="color:#888;font-size:0.9rem">视频预览</p>
+                            <p style="color:#666;font-size:0.8rem">从字幕列表编辑时加载对应视频</p>
+                        </div>
+                        <div id="previewTranscodeHint" class="preview-hint" style="display:none;text-align:center;padding:8px 12px;font-size:0.85rem;color:#aaa">
+                            <span class="spinner-border spinner-border-sm" role="status" style="vertical-align:middle;margin-right:8px"></span>
+                            <span>正在生成预览流（4K HEVC 转码需 5-15 秒）...</span>
+                        </div>
+                        <video id="editorVideo" controls style="display:none" preload="metadata">
+                            浏览器不支持视频播放
+                        </video>
+                        <audio id="editorAudio" controls style="display:none;width:100%;margin-top:4px" preload="auto"></audio>
+                        <button id="extractAudioBtn" class="btn btn-secondary btn-small" style="display:none;margin-top:4px;width:100%">🔊 提取音频</button>
+                    </div>
+                    <div class="editor-segments-panel">
+                        <div class="editor-toolbar">
+                            <div class="editor-info">
+                                <span id="editorFilename">-</span>
+                                <span id="editorFormat" class="format-badge">SRT</span>
+                            </div>
+                            <div class="editor-actions">
+                                <button class="btn btn-secondary btn-small" onclick="addSegment()">+ 片段</button>
+                                <button class="btn btn-secondary btn-small" onclick="shiftEditedSegments(-0.5)">提前 0.5s</button>
+                                <button class="btn btn-secondary btn-small" onclick="shiftEditedSegments(0.5)">延后 0.5s</button>
+                                <button class="btn btn-secondary btn-small" onclick="checkCurrentSubtitleQuality()">质检</button>
+                                <button class="btn btn-secondary btn-small" onclick="resetChanges()">重置</button>
+                                <button class="btn btn-primary btn-small" onclick="saveSubtitleChanges()">保存</button>
+                            </div>
+                        </div>
+                        <div class="segments-container" id="segmentsContainer"></div>
+                        <!-- 词级时间戳逐词条：转录时开了 ASR_WORD_TIMESTAMPS 才有数据 -->
+                        <div class="word-strip" id="wordStrip" style="display:none">
+                            <div class="word-strip-head">
+                                <span id="wordStripTitle">逐词</span>
+                                <span class="word-strip-hint">点击词可跳转 · 红色为低置信度（易错）</span>
+                            </div>
+                            <div class="word-chips" id="wordChips"></div>
+                        </div>
+                        <div class="shortcuts-bar" id="shortcutsBar">
+                            <span><strong>Space</strong> 播放/暂停</span>
+                            <span><strong>↑↓</strong> 切换片段</span>
+                            <span><strong>Ctrl+S</strong> 保存</span>
+                            <span><strong>Esc</strong> 关闭</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <div class="editor-stats" id="editorStats">
+                    <span>片段: <strong id="totalSegments">0</strong></span>
+                    <span>时长: <strong id="totalDuration">00:00</strong></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 历史记录模态框 -->
+    <!-- 2026-06-22 新增：字幕轨选择 + 进度弹层 -->
+<div class="modal" id="extractSubtitleModal" style="display:none">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>提取内嵌字幕</h3>
+            <button class="btn-close" onclick="closeExtractSubtitleModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p>视频：<strong id="extractSubtitleFileName">-</strong></p>
+            <p class="hint">选择要抽取的字幕轨（仅显示文本字幕：SRT / ASS / WebVTT）</p>
+            <div id="extractSubtitleStreams" class="subtitle-streams-container">
+                <div class="loading-spinner">加载中...</div>
+            </div>
+            <div id="extractSubtitleProgress" class="extract-progress" style="display:none; margin-top: 16px;">
+                <div class="progress-bar"><div class="progress-fill" id="extractSubtitleProgressFill" style="width:0%"></div></div>
+                <p id="extractSubtitleProgressText">准备中...</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 2026-06-22 新增：任务队列管理弹层 -->
+<div class="modal" id="queueModal" style="display:none">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>任务队列</h3>
+            <button class="btn-close" onclick="closeQueue()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="queue-stats" id="queueStats">
+                <span class="stat-item">活跃 worker: <strong id="queueStatWorkers">0</strong></span>
+                <span class="stat-item">处理中: <strong id="queueStatProcessing">0</strong></span>
+                <span class="stat-item">等待: <strong id="queueStatPending">0</strong></span>
+                <span class="stat-item">完成: <strong id="queueStatCompleted">0</strong></span>
+                <span class="stat-item">失败: <strong id="queueStatFailed">0</strong></span>
+            </div>
+            <div class="queue-controls">
+                <button class="btn btn-secondary btn-small" onclick="pollQueueList()">刷新</button>
+                <button class="btn btn-primary btn-small" onclick="showAddTaskModal()">+ 添加任务</button>
+                <label class="auto-refresh-toggle">
+                    <input type="checkbox" id="queueAutoRefresh" checked> 自动刷新 (3s)
+                </label>
+            </div>
+            <div class="queue-container" id="queueContainer">
+                <div class="loading-spinner">加载中...</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 2026-06-22 E1: 添加任务弹层 -->
+<div class="modal" id="addTaskModal" style="display:none">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>添加任务到队列</h3>
+            <button class="btn-close" onclick="closeAddTaskModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label>视频路径</label>
+                <input type="text" id="addTaskVideoPath" placeholder="/nas/videos/example.mkv" style="width:100%">
+                <small style="color:#888;">NAS 视频用 /nas/videos/...，上传文件用 /app/uploads/...</small>
+            </div>
+            <div class="form-group">
+                <label>任务类型</label>
+                <select id="addTaskType" style="width:100%;">
+                    <option value="whisper">whisper 转录（AI 听写）</option>
+                    <option value="extract_subtitle" selected>extract_subtitle（抽内嵌字幕轨）</option>
+                </select>
+            </div>
+            <div id="addTaskExtractOptions">
+                <div class="form-group">
+                    <label>字幕轨 index（从 0 开始，0=第一条字幕轨）</label>
+                    <input type="number" id="addTaskStreamIndex" value="0" min="0">
+                </div>
+                <div class="form-group">
+                    <label>OCR 模式（仅当字幕轨是图像字幕时有效）</label>
+                    <select id="addTaskMode" style="width:100%;">
+                        <option value="text" selected>text（直接抽，需 SRT 字幕轨）</option>
+                        <option value="ocr">ocr（OCR 识别，需 PGS/DVD 字幕轨）</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>OCR 语言（仅 OCR 模式）</label>
+                    <input type="text" id="addTaskOcrLang" value="chi_sim+eng">
+                </div>
+            </div>
+            <div class="form-group">
+                <label>优先级</label>
+                <select id="addTaskPriority" style="width:100%;">
+                    <option value="0" selected>普通 (0)</option>
+                    <option value="10">高 (10)</option>
+                    <option value="-5">低 (-5)</option>
+                </select>
+            </div>
+            <div id="addTaskMessage" style="margin-top:10px;"></div>
+            <div style="margin-top:16px;text-align:right;">
+                <button class="btn btn-secondary btn-small" onclick="closeAddTaskModal()">取消</button>
+                <button class="btn btn-primary btn-small" onclick="submitNewTask()">提交</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+    <div class="modal" id="historyModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>处理历史</h3>
+                <button class="btn-close" onclick="closeHistory()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="history-controls">
+                    <button class="btn btn-secondary btn-small" onclick="clearHistory()">清空</button>
+                    <button class="btn btn-secondary btn-small" onclick="exportHistory()">导出</button>
+                </div>
+                <div class="history-container" id="historyContainer">
+                    <div class="loading-spinner">加载中...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="tokenModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>访问令牌</h3>
+                <button class="btn-close" onclick="closeTokenSettings()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="password" id="tokenInput" placeholder="输入 AUTH_TOKEN" style="width:100%">
+                <div style="margin-top:16px;text-align:right">
+                    <button class="btn btn-secondary btn-small" onclick="clearSavedToken()">清除</button>
+                    <button class="btn btn-primary btn-small" onclick="saveTokenSettings()">保存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="toolsModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>工具中心</h3>
+                <button class="btn-close" onclick="closeTools()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="tool-grid">
+                    <button class="btn btn-secondary" onclick="runCleanup('old')">清理旧文件</button>
+                    <button class="btn btn-secondary" onclick="runCleanup('cache')">清理预览缓存</button>
+                    <button class="btn btn-secondary" onclick="runCleanup('failed-tasks')">清理失败任务</button>
+                    <button class="btn btn-secondary" onclick="runCleanup('history')">清空历史</button>
+                    <button class="btn btn-secondary" onclick="loadModelsInfo()">模型信息</button>
+                    <button class="btn btn-secondary" onclick="loadResourceProfile()">资源模式</button>
+                    <button class="btn btn-secondary" onclick="showGlossaryManager()">术语表</button>
+                    <button class="btn btn-secondary" onclick="showNotificationSettings()">通知</button>
+                    <button class="btn btn-secondary" onclick="showLlmSettings()">AI 翻译</button>
+                    <button class="btn btn-secondary" onclick="loadQueueReport()">任务报告</button>
+                </div>
+                <pre id="toolsOutput" class="tools-output"></pre>
+            </div>
+        </div>
+    </div>
+
+    <!-- 系统信息模态框 -->
+    <div class="modal" id="systemInfoModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>系统信息</h3>
+                <button class="btn-close" onclick="closeSystemInfo()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="system-info-container" id="systemInfoContainer">
+                    <div class="loading-spinner">加载中...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    
+    <!-- 确认对话框 -->
+    <div class="modal" id="confirmModal">
+        <div class="modal-content" style="max-width:420px">
+            <div class="modal-header">
+                <h3 id="confirmTitle">确认操作</h3>
+            </div>
+            <div class="modal-body" style="padding:24px">
+                <p id="confirmMessage" style="margin:0;color:var(--text);line-height:1.6"></p>
+            </div>
+            <div class="modal-footer" style="display:flex;gap:10px;justify-content:flex-end">
+                <button class="btn btn-secondary" id="confirmCancelBtn">取消</button>
+                <button class="btn btn-primary" id="confirmOkBtn">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 输入对话框（替代原生 prompt，内嵌 WebView 环境会禁用原生弹窗） -->
+    <div class="modal" id="inputModal">
+        <div class="modal-content" style="max-width:420px">
+            <div class="modal-header">
+                <h3 id="inputModalTitle">输入</h3>
+            </div>
+            <div class="modal-body" style="padding:24px">
+                <p id="inputModalMessage" style="margin:0 0 12px;color:var(--text);line-height:1.6"></p>
+                <input type="text" id="inputModalField" style="width:100%" autocomplete="off">
+                <div id="inputModalError" style="display:none;margin-top:8px;color:var(--danger,#e74c3c);font-size:0.85rem"></div>
+            </div>
+            <div class="modal-footer" style="display:flex;gap:10px;justify-content:flex-end">
+                <button class="btn btn-secondary" id="inputModalCancelBtn">取消</button>
+                <button class="btn btn-primary" id="inputModalOkBtn">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 鉴权门槛：token 缺失/失效时阻断式弹层（原实现静默 401，界面像"完全坏了"） -->
+    <div class="modal" id="authGateModal" style="z-index:9999">
+        <div class="modal-content" style="max-width:400px">
+            <div class="modal-header">
+                <h3>🔐 需要访问令牌</h3>
+            </div>
+            <div class="modal-body" style="padding:24px">
+                <p style="margin:0 0 12px;color:var(--text,#333);line-height:1.6;font-size:0.9rem">
+                    本服务已开启访问保护。请输入访问口令（NAS 项目目录 .env 中的 AUTH_TOKEN）。
+                    默认仅在当前页面使用；勾选下方选项后才会保存在此浏览器。请勿在共用设备上记住口令。
+                </p>
+                <input type="password" id="authGateInput" placeholder="粘贴访问口令" style="width:100%"
+                       onkeydown="if(event.key==='Enter'){submitAuthGate();}">
+                <label style="display:block;margin-top:12px"><input type="checkbox" id="rememberAuthToken"> 在此浏览器记住访问口令</label>
+                <div id="authGateError" style="display:none;margin-top:8px;color:var(--danger,#e74c3c);font-size:0.85rem"></div>
+            </div>
+            <div class="modal-footer" style="display:flex;gap:10px;justify-content:flex-end">
+                <button class="btn btn-primary" onclick="submitAuthGate()">验证并进入</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 烧录样式设置（对标主流剪辑工具的硬字幕样式面板） -->
+    <div class="modal" id="burnStyleModal">
+        <div class="modal-content" style="max-width:580px">
+            <div class="modal-header">
+                <h3>烧录字幕 <span id="burnStyleFileName" style="font-size:0.8rem;opacity:.7"></span></h3>
+                <button class="btn-close" onclick="closeBurnStyleModal()">&times;</button>
+            </div>
+            <div class="modal-body" style="padding:20px 24px">
+                <!-- 实时预览：样式改动即时生效，无需提交烧录（CSS 近似，最终成片以 ffmpeg 为准） -->
+                <div class="burn-preview" id="burnPreview">
+                    <div class="burn-preview-canvas">
+                        <div class="burn-preview-text" id="burnPreviewText">这是字幕预览效果</div>
+                    </div>
+                    <div class="burn-preview-note">预览为 CSS 近似（字号/颜色/描边/位置/边距等比换算），字体度量与换行可能与最终成片略有差异</div>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+                    <button class="btn btn-secondary btn-tiny" onclick="applyBurnPreset('default')">默认</button>
+                    <button class="btn btn-secondary btn-tiny" onclick="applyBurnPreset('big')">大字幕</button>
+                    <button class="btn btn-secondary btn-tiny" onclick="applyBurnPreset('strong')">粗描边</button>
+                    <button class="btn btn-secondary btn-tiny" onclick="applyBurnPreset('top')">顶部黄字</button>
+                </div>
+                <div style="display:grid;grid-template-columns:auto 1fr;gap:10px 14px;align-items:center;font-size:0.9rem">
+                    <label>字号</label>
+                    <input type="number" id="burnFontSize" min="8" max="96" value="24" style="width:100%">
+                    <label>字体颜色</label>
+                    <input type="color" id="burnFontColor" value="#FFFFFF" style="width:100%;height:34px">
+                    <label>描边颜色</label>
+                    <input type="color" id="burnOutlineColor" value="#000000" style="width:100%;height:34px">
+                    <label>描边宽度</label>
+                    <input type="number" id="burnOutlineWidth" min="0" max="10" value="2" style="width:100%">
+                    <label>位置</label>
+                    <select id="burnPosition" style="width:100%">
+                        <option value="bottom">底部</option>
+                        <option value="middle">居中</option>
+                        <option value="top">顶部</option>
+                    </select>
+                    <label>垂直边距</label>
+                    <input type="number" id="burnMarginV" min="0" max="400" value="28" style="width:100%">
+                    <label>加粗</label>
+                    <input type="checkbox" id="burnBold" style="width:18px;height:18px">
+                </div>
+            </div>
+            <div class="modal-footer" style="display:flex;gap:10px;justify-content:flex-end">
+                <button class="btn btn-secondary" onclick="closeBurnStyleModal()">取消</button>
+                <button class="btn btn-primary" onclick="confirmBurnSubtitle()">开始烧录</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- AI 翻译引擎配置（可选 LLM，未启用时走本地 opus-mt） -->
+    <div class="modal" id="llmModal">
+        <div class="modal-content" style="max-width:480px">
+            <div class="modal-header">
+                <h3>AI 翻译引擎</h3>
+                <button class="btn-close" onclick="closeLlmSettings()">&times;</button>
+            </div>
+            <div class="modal-body" style="padding:20px 24px">
+                <p style="margin:0 0 12px;color:var(--text,#333);font-size:0.85rem;line-height:1.6">
+                    接入任意 OpenAI 兼容接口（如 DeepSeek、MiniMax、通义、OpenRouter）后，
+                    翻译质量和语言对覆盖远超内置本地模型；未启用时自动使用本地 opus-mt。
+                </p>
+                <div style="display:grid;grid-template-columns:auto 1fr;gap:10px 14px;align-items:center;font-size:0.9rem">
+                    <label>启用</label>
+                    <input type="checkbox" id="llmEnabled" style="width:18px;height:18px">
+                    <label>接口地址</label>
+                    <input type="text" id="llmBaseUrl" placeholder="https://api.deepseek.com/v1" style="width:100%">
+                    <label>API Key</label>
+                    <input type="password" id="llmApiKey" placeholder="留空 = 保留已保存的 Key" style="width:100%">
+                    <label>模型</label>
+                    <input type="text" id="llmModel" placeholder="deepseek-chat / MiniMax-M3 / qwen-plus ..." style="width:100%">
+                </div>
+                <div id="llmTestResult" style="display:none;margin-top:10px;font-size:0.85rem;color:var(--text,#333)"></div>
+            </div>
+            <div class="modal-footer" style="display:flex;gap:10px;justify-content:flex-end">
+                <button class="btn btn-secondary" onclick="testLlmConfig()">测试连接</button>
+                <button class="btn btn-primary" onclick="saveLlmConfig()">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 媒体库：上传过的媒体文件（此前页面刷新/服务重启后无处可寻） -->
+    <div class="modal" id="mediaLibraryModal">
+        <div class="modal-content" style="max-width:680px">
+            <div class="modal-header">
+                <h3>媒体库（已上传文件）</h3>
+                <button class="btn-close" onclick="closeMediaLibrary()">&times;</button>
+            </div>
+            <div class="modal-body" style="padding:16px 20px;max-height:65vh;overflow:auto">
+                <div id="mediaLibraryList">加载中...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- AI 转写摘要结果 -->
+    <div class="modal" id="summaryModal">
+        <div class="modal-content" style="max-width:640px">
+            <div class="modal-header">
+                <h3>AI 内容总结 <span id="summaryFileName" style="font-size:0.8rem;opacity:.7"></span></h3>
+                <button class="btn-close" onclick="closeSummaryModal()">&times;</button>
+            </div>
+            <div class="modal-body" style="padding:16px 20px">
+                <div id="summaryStatus" style="font-size:0.9rem;opacity:.75;margin-bottom:10px">生成中，约需十几秒…</div>
+                <pre id="summaryContent" style="white-space:pre-wrap;font-family:inherit;font-size:0.92rem;line-height:1.7;max-height:55vh;overflow:auto;background:var(--surface,#f6f7f9);padding:14px;border-radius:8px"></pre>
+            </div>
+            <div class="modal-footer" style="display:flex;gap:10px;justify-content:flex-end">
+                <button class="btn btn-secondary" id="summaryDownloadBtn" style="display:none" onclick="downloadSummary()">下载 .md</button>
+                <button class="btn btn-primary" onclick="closeSummaryModal()">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+    <script src="/static/js/vendor/hls.min.js?v=20261011-r4.1"></script>
+    <script src="/static/js/app.js?v=20261011-r4.1"></script>
+</body>
+</html>

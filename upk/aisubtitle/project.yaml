@@ -1,0 +1,37 @@
+spec_version: 2.1
+app_id: com.jvsheng.aisubtitle
+version: 1.0.0
+support_arch:
+  - amd64
+is_docker_app: true
+tag_types:
+  - utility
+  - media
+depend_fw_version: 1.0.0
+depend_docker_version: 1.20.0
+allow_add_access_path: true
+open_type: tab
+port: 9000
+parameters:
+  - key: MEDIA_DIR
+    type: path
+    required: true
+    changeable: true
+    i18n:
+      zh-CN:
+        name: 视频媒体目录
+        description: 请选择存放待处理视频的目录。该目录会以只读方式挂载给应用，用于在应用内直接浏览并选取 NAS 上的视频生成字幕；应用不会修改该目录中的任何文件。建议选择视频媒体库专用目录。
+      en-US:
+        name: Video media folder
+        description: Choose the folder that stores your videos. It is mounted read-only so the app can browse and pick NAS videos for subtitling; the app never modifies files in it. A dedicated media library folder is recommended.
+i18n:
+  zh-CN:
+    name: AI 字幕生成器
+    description: 本地优先的 AI 字幕工具：基于 Whisper 本地语音识别为 NAS 中的视频生成时间轴精准的字幕，素材与结果全部保存在本机。支持中英双语字幕烧录（检测到 Intel 核显时自动硬加速）、文本/图像 OCR 字幕提取、SRT/ASS/VTT/JSON/TXT 格式互转、字幕时间轴与样式编辑预览；翻译内置离线翻译模型，另随包内置本地大模型翻译引擎（Hy-MT2-7B 翻译 + Qwen3-4B 润色，CPU 运行、空闲自动休眠），也可在设置中改配任意 OpenAI 兼容云端接口。本应用不提供任何云服务，模型文件仅在首次使用时从公共镜像源按需下载。
+    author: jvsheng
+    publisher: jvsheng
+  en-US:
+    name: AI Subtitle Generator
+    description: Local-first AI subtitle tool for your NAS. Generates accurate, timestamped subtitles with on-device Whisper speech recognition; all media and results stay on your own device. Burns bilingual subtitles (auto Intel iGPU acceleration when available), extracts text and OCR subtitle tracks, converts SRT/ASS/VTT/JSON/TXT, and edits timings and styles with live preview. Ships with offline translation models plus a bundled local LLM engine (Hy-MT2-7B for translation, Qwen3-4B for refinement — CPU mode, sleeps when idle); any OpenAI-compatible cloud endpoint can be configured instead. No cloud service is provided; models are downloaded on demand from public mirrors on first use.
+    author: jvsheng
+    publisher: jvsheng

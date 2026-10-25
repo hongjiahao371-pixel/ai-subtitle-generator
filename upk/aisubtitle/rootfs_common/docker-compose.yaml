@@ -1,0 +1,99 @@
+services:
+  ai-subtitle:
+    image: aisubtitle/app:upk-20261021
+    restart: unless-stopped
+    depends_on:
+      - subtitle-translator
+      - subtitle-editor
+    ports:
+      - "9000:5000"
+    environment:
+      - FLASK_ENV=production
+      - AUTH_TOKEN=
+      - MODEL_SIZE=small
+      - TASK_WORKER_COUNT=1
+      - USE_GPU=auto
+      - ASR_BEAM_SIZE=5
+      - ASR_WORD_TIMESTAMPS=1
+      - ASR_NO_SPEECH_THRESHOLD=0.6
+      - ASR_CONDITION_ON_PREV_TEXT=0
+      - ASR_CHUNK_SECONDS=900
+      - ASR_CHUNK_OVERLAP=3
+      - TRANSLATOR_MODELS_DIR=/app/translator_models
+      - HF_ENDPOINT=https://hf-mirror.com
+      - HF_HUB_DOWNLOAD_TIMEOUT=600
+      - HF_HUB_OFFLINE=0
+      - TRANSFORMERS_OFFLINE=0
+      - NAS_PATH=/nas/videos
+      - PREVIEW_TRANSCODE_SECONDS=0
+      - PREVIEW_CLIP_SECONDS=0
+      - TZ=Asia/Shanghai
+      - TRANSLATE_BATCH_SIZE=24
+      - LLM_CTX_BEFORE=3
+      - LLM_CTX_AFTER=2
+      - LLM_BATCH_SIZE=6
+      - LOCAL_LLM_MEMORY_MODE=1
+      - ASR_PREWARM=0
+      - SUBTITLE_EDITOR_URL=http://subtitle-editor:8080/v1
+      - SUBTITLE_LOCAL_MODELS_ID=9f96256500f3fc1a-7485fe6f11af2943
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        mkdir -p /app/data
+        if [ ! -f /app/data/llm.json ]; then
+        cat > /app/data/llm.json <<'EOF'
+        {
+          "enabled": true,
+          "base_url": "http://subtitle-translator:8080/v1",
+          "api_key": "LOCAL_RANDOM_TOKEN_PLACEHOLDER",
+          "model": "HY-MT2-7B",
+          "provider": "nas-local"
+        }
+        EOF
+        fi
+        if [ -f /hostdri/iHD_drv_video.so ]; then
+        export LIBVA_DRIVERS_PATH=/hostdri
+        fi
+        exec /app/entrypoint.sh
+    volumes:
+      - ./uploads:/app/uploads
+      - ./subtitles:/app/subtitles
+      - ./models:/root/.cache/huggingface
+      - ./checkpoints:/app/checkpoints
+      - ./translator_models:/app/translator_models
+      - ./audio:/app/audio
+      - ./data:/app/data
+      - ${MEDIA_DIR}:/nas/videos:ro
+      - /usr/lib/x86_64-linux-gnu/dri:/hostdri:ro
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "44"
+      - "105"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/api/health', timeout=8)
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 3
+
+  subtitle-translator:
+    image: aisubtitle/llamacpp:upk-20261016
+    restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - -c
+      - exec /opt/llama/llama-server --model /models/Hy-MT2-7B-Q4_K_M.gguf --alias HY-MT2-7B --host 0.0.0.0 --port 8080 --ctx-size 2048 --threads 3 --threads-batch 3 --parallel 1 --n-gpu-layers 0 --api-key LOCAL_RANDOM_TOKEN_PLACEHOLDER --sleep-idle-seconds 15
+
+  subtitle-editor:
+    image: aisubtitle/llamacpp:upk-20261016
+    restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - -c
+      - exec /opt/llama/llama-server --model /models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf --alias Qwen3-4B-Instruct-2507 --host 0.0.0.0 --port 8080 --ctx-size 4096 --threads 3 --threads-batch 3 --parallel 1 --n-gpu-layers 0 --api-key LOCAL_RANDOM_TOKEN_PLACEHOLDER --sleep-idle-seconds 15 --reasoning-budget 0 --reasoning-format deepseek

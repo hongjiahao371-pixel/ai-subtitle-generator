@@ -1,0 +1,11 @@
+ARG RUNTIME_IMAGE=ai-subtitle-generator:20261011-r3
+FROM ${RUNTIME_IMAGE}
+RUN apt-get update -qq && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
+RUN pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --no-cache-dir rapidocr-onnxruntime==1.4.4 pypinyin==0.55.0 opencv-python==4.10.0.84 && pip check
+COPY app/utils/ /app/app/utils/
+COPY app/static/ /app/app/static/
+COPY app/templates/ /app/app/templates/
+COPY app.py /app/app/app.py
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/api/health', timeout=8)"
