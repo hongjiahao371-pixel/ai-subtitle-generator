@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#FAF7F2" media="(prefers-color-scheme: light)">
     <meta name="theme-color" content="#1A1614" media="(prefers-color-scheme: dark)">
     <title>AI 字幕生成器</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=20261011-r4.1">
+    <link rel="stylesheet" href="/static/css/style.css?v=20261026-r5.2">
     <link rel="icon" href="/favicon.ico" type="image/svg+xml">
 </head>
 <body>
@@ -33,8 +33,9 @@
                     <button class="btn btn-secondary btn-small" onclick="showTools()" title="工具">
                         工具
                     </button>
-                    <button class="btn btn-secondary btn-small" onclick="showTokenSettings()" title="访问令牌">
-                        Token
+                    <span id="navTaskDot" title="任务进行中"></span>
+                    <button class="btn btn-secondary btn-small" onclick="showTokenSettings()" title="访问口令">
+                        口令
                     </button>
                     <button class="btn btn-secondary btn-small" id="langToggle" onclick="toggleUiLanguage()" title="Switch to English">EN</button>
                     <!-- 2026-06-22 新增：提取字幕（仅当在 NAS 文件区点了带字幕视频时才用）-->
@@ -741,6 +742,6 @@
     <div class="toast" id="toast"></div>
     <script src="/static/js/vendor/hls.min.js?v=20261011-r4.1"></script>
     <script src="/static/js/i18n-en.js?v=20261026-r5.1"></script>
-    <script src="/static/js/app.js?v=20261026-r5.1"></script>
+    <script src="/static/js/app.js?v=20261026-r5.2"></script>
 </body>
 </html>

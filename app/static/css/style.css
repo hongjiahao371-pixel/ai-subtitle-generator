@@ -1656,3 +1656,32 @@ textarea {
     opacity: 0.55;
     line-height: 1.4;
 }
+
+/* ==== 2026-10-26：字幕操作按钮收纳 + 导航任务指示 ==== */
+.subtitle-actions .more-group { display: none; }
+.subtitle-actions.open .more-group { display: inline-block; }
+.subtitle-actions .more-toggle::after { content: ' ▾'; font-size: 0.75em; }
+.subtitle-actions.open .more-toggle::after { content: ' ▴'; }
+.more-toggle { min-width: 58px; }
+
+#navTaskDot {
+    display: none;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #22c55e;
+    margin-right: 6px;
+    vertical-align: middle;
+    animation: navPulse 1.2s ease-in-out infinite;
+}
+#navTaskDot.running { display: inline-block; }
+@keyframes navPulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.45; transform: scale(0.8); }
+}
+
+/* 拖拽高亮（深浅色主题自适应） */
+.upload-area.dragover, .batch-upload-area.dragover {
+    border-color: var(--accent, #e8965a) !important;
+    background: rgba(232, 150, 90, 0.08) !important;
+    transform: scale(1.005);
+}
