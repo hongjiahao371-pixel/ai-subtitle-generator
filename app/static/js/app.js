@@ -837,6 +837,9 @@ function renderSubtitles(subtitles) {
                         <button class="btn btn-ghost btn-small subtitle-action" data-action="burn" data-filename="${filenameAttr}" title="烧录到视频">
                             烧录
                         </button>
+                        <button class="btn btn-ghost btn-small subtitle-action" data-action="mux" data-filename="${filenameAttr}" title="封装软字幕到 MKV（不重编码，播放器可开关字幕）">
+                            封装
+                        </button>
                         <button class="btn btn-ghost btn-small subtitle-action" data-action="quality" data-filename="${filenameAttr}">
                             质检
                         </button>
@@ -870,6 +873,7 @@ function renderSubtitles(subtitles) {
             else if (action === 'edit') editSubtitle(filename);
             else if (action === 'download') downloadSubtitle(filename);
             else if (action === 'burn') burnSubtitle(filename);
+            else if (action === 'mux') muxSubtitle(filename);
             else if (action === 'quality') qualitySubtitle(filename);
             else if (action === 'convert') convertSubtitle(filename);
             else if (action === 'translate') translateSubtitle(filename);
@@ -1147,6 +1151,79 @@ async function doBurnSubtitle(subtitleFilename, style) {
     } catch (e) {
         showToast('烧录失败: ' + e.message, 'error');
     }
+}
+
+// ==== 软字幕封装（2026-10-26）：字幕作为软轨封装进 MKV，不重编码、播放器可开关 ====
+var muxTaskId = null;
+var muxStatusInterval = null;
+
+function muxSubtitle(subtitleFilename) {
+    uiConfirmAsync('软字幕封装', '将字幕作为软字幕轨封装进 MKV 容器？视频不重新编码（秒级完成），播放器里可随时开关字幕。', {
+        okText: '封装'
+    }).then(function(ok) {
+        if (!ok) return;
+        doMuxSubtitle(subtitleFilename);
+    });
+}
+
+async function doMuxSubtitle(subtitleFilename) {
+    try {
+        var resp = await apiFetch('/api/subtitle-mux', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ subtitle_filename: subtitleFilename })
+        });
+        var result = await resp.json();
+        if (result.success) {
+            muxTaskId = result.task_id;
+            showStatusSection('processing');
+            document.getElementById('statusText').textContent = '正在封装软字幕...';
+            document.getElementById('progressContainer').style.display = 'block';
+            scheduleMuxPoll();
+            showToast('软字幕封装已启动', 'info');
+        } else {
+            showToast('封装失败: ' + result.error, 'error');
+        }
+    } catch (e) {
+        showToast('封装失败: ' + e.message, 'error');
+    }
+}
+
+function scheduleMuxPoll() {
+    muxStatusInterval = setTimeout(checkMuxStatus, 2000);
+}
+
+async function checkMuxStatus() {
+    if (!muxTaskId) return;
+    try {
+        var resp = await apiFetch('/api/status/' + muxTaskId);
+        var result = await resp.json();
+        if (result.success && result.task) {
+            var task = result.task;
+            updateProgress(task.progress || 0, task.progress_info || '');
+            if (task.status === 'completed') {
+                muxStatusInterval = null;
+                showStatusSection('completed');
+                document.getElementById('statusText').textContent = '封装完成！';
+                var details = '输出文件: <strong>' + escapeHtml(task.result.output_file) + '</strong><br>' +
+                    '文件大小: <strong>' + formatFileSize(task.result.size) + '</strong>';
+                document.getElementById('statusDetails').innerHTML = details;
+                document.getElementById('generateBtn').disabled = false;
+                document.getElementById('cancelBtn').style.display = 'none';
+                loadSubtitles();
+                showToast('软字幕封装完成！', 'success');
+                muxTaskId = null;
+            } else if (task.status === 'failed') {
+                muxStatusInterval = null;
+                showStatusSection('failed');
+                document.getElementById('statusDetails').textContent = task.error || '封装失败';
+                document.getElementById('generateBtn').disabled = false;
+                document.getElementById('cancelBtn').style.display = 'none';
+                showToast('封装失败', 'error');
+                muxTaskId = null;
+            }
+        }
+    } catch (e) { /* 网络抖动下一轮重试 */ }
 }
 
 function scheduleBurnPoll() {
@@ -3689,6 +3766,103 @@ async function runCleanup(target) {
         body: JSON.stringify({target})
     });
     writeToolsOutput(await resp.json());
+}
+
+var _whisperPollTimer = null;
+
+async function showWhisperModels() {
+    var box = document.getElementById('whisperModelsBox');
+    if (box) box.style.display = 'block';
+    await refreshWhisperModels();
+    if (_whisperPollTimer) { clearTimeout(_whisperPollTimer); _whisperPollTimer = null; }
+    pollWhisperDownloads();
+}
+
+async function refreshWhisperModels() {
+    try {
+        var resp = await apiFetch('/api/models');
+        var data = await resp.json();
+        renderWhisperModels(data);
+    } catch (e) {
+        var box = document.getElementById('whisperModelsBox');
+        if (box) box.innerHTML = '<div style="color:var(--danger,#e74c3c)">加载失败: ' + escapeHtml(e.message) + '</div>';
+    }
+}
+
+function renderWhisperModels(data) {
+    var box = document.getElementById('whisperModelsBox');
+    if (!box) return;
+    var models = data.whisper_models || [];
+    var dls = data.whisper_downloads || {};
+    var allowed = data.whisper_allowed || [];
+    var sizeMap = {};
+    models.forEach(function(m) { sizeMap[m.name] = m.size; });
+    var labelMap = { tiny: 'Tiny (最快)', base: 'Base (平衡)', small: 'Small (较准)', medium: 'Medium (准确)',
+                     turbo: 'Turbo (速度优先)', 'large-v3-turbo': 'Large V3 Turbo', 'large-v3': 'Large V3 (高精度)', large: 'Large (同 V3)' };
+    var order = ['tiny', 'base', 'small', 'medium', 'turbo', 'large-v3-turbo', 'large-v3', 'large'];
+    var html = '<div style="font-weight:600;margin-bottom:8px">Whisper 语音识别模型</div>';
+    html += '<div style="font-size:0.82rem;color:var(--text-secondary,#98A2B3);margin-bottom:10px">预下载后离线可用；删除已缓存的模型可释放空间（正在使用的档位删掉后下次任务会自动重新下载）</div>';
+    order.forEach(function(name) {
+        if (allowed.indexOf(name) === -1) return;
+        var size = sizeMap[name];
+        var dl = dls[name] || {};
+        var downloading = dl.status === 'downloading';
+        var stateHtml = downloading
+            ? '<span style="color:#3b82f6">下载中...</span>'
+            : (dl.status === 'failed' ? '<span style="color:var(--danger,#e74c3c)" title="' + escapeAttr(dl.error || '') + '">上次下载失败</span>'
+               : (size ? '<span style="color:#22c55e">已缓存 ' + formatFileSize(size) + '</span>' : '<span style="color:var(--text-secondary,#98A2B3)">未下载</span>'));
+        var btn = downloading
+            ? ''
+            : (size
+                ? '<button class="btn btn-ghost-danger btn-small" onclick="whisperDelete(\'' + name + '\')">删除</button>'
+                : '<button class="btn btn-secondary btn-small" onclick="whisperDownload(\'' + name + '\')">下载</button>');
+        html += '<div style="display:flex;align-items:center;gap:10px;padding:7px 10px;border:1px solid var(--border,#333);border-radius:8px;margin-bottom:6px">' +
+                '<div style="flex:1"><strong>' + (labelMap[name] || name) + '</strong> <span style="font-size:0.78rem;color:var(--text-secondary,#98A2B3)">' + name + '</span></div>' +
+                '<div style="font-size:0.82rem">' + stateHtml + '</div>' + btn + '</div>';
+    });
+    html += '<div style="font-size:0.78rem;color:var(--text-secondary,#98A2B3);margin-top:6px">首次使用某档位时也会自动按需下载（走 hf-mirror 镜像）</div>';
+    box.innerHTML = html;
+}
+
+async function whisperDownload(name) {
+    try {
+        var resp = await apiFetch('/api/models/whisper/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: name })
+        });
+        var r = await resp.json();
+        if (!r.success) { showToast(r.error || '下载启动失败', 'error'); return; }
+        showToast('模型 ' + name + ' 下载已启动', 'info');
+        await refreshWhisperModels();
+        pollWhisperDownloads();
+    } catch (e) { showToast('下载启动失败: ' + e.message, 'error'); }
+}
+
+async function whisperDelete(name) {
+    var ok = await uiConfirmAsync('删除 Whisper 模型', '确认删除已缓存的 ' + name + ' 模型？正在使用的档位会在下次任务时自动重新下载。', { okText: '删除', danger: true });
+    if (!ok) return;
+    try {
+        var resp = await apiFetch('/api/models/whisper/' + encodeURIComponent(name), { method: 'DELETE' });
+        var r = await resp.json();
+        if (r.success) { showToast('模型已删除', 'success'); await refreshWhisperModels(); }
+        else showToast(r.error || '删除失败', 'error');
+    } catch (e) { showToast('删除失败: ' + e.message, 'error'); }
+}
+
+function pollWhisperDownloads() {
+    if (_whisperPollTimer) clearTimeout(_whisperPollTimer);
+    _whisperPollTimer = setTimeout(async function() {
+        try {
+            var resp = await apiFetch('/api/models');
+            var data = await resp.json();
+            var dls = data.whisper_downloads || {};
+            var any = Object.keys(dls).some(function(k) { return dls[k].status === 'downloading'; });
+            var box = document.getElementById('whisperModelsBox');
+            if (box && box.style.display !== 'none') renderWhisperModels(data);
+            if (any) pollWhisperDownloads();
+        } catch (e) {}
+    }, 3000);
 }
 
 async function loadModelsInfo() {

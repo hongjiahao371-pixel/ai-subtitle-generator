@@ -24,6 +24,61 @@ _LLM_LANG_NAMES = {
     'de': '德语', 'es': '西班牙语', 'ru': '俄语', 'it': '意大利语', 'pt': '葡萄牙语',
 }
 
+
+# ============================================================================
+# 幻听字幕清洗（2026-10-26）：Whisper 对 BGM/静音/尾奏段的已知幻听输出黑名单。
+# 只做「整句精确匹配」（归一化大小写/空白/首尾标点后），不做子串匹配，避免误杀真实台词。
+# 可用 ASR_SCRUB_HALLUCINATIONS=0 关闭。
+# ============================================================================
+_HALLUCINATION_TEXTS = frozenset(x.strip() for x in """
+字幕由Amara.org社区提供
+字幕由Amara.org
+字幕由社区提供
+由Amara.org社区提供
+请不客气地观看
+请不吝点赞订阅转发打赏支持明德与普法
+谢谢观看
+感谢收看
+字幕
+字幕组
+Subtitles by the Amara.org community
+Subtitles by Amara.org
+Subtitle by Amara.org
+Subtitles by the Amara Community
+Thank you for watching
+Thanks for watching!
+Thanks for watching
+Please subscribe to my channel
+Please subscribe
+Subscribe to my channel
+ご視聴ありがとうございました
+おしまい
+最後までご視聴いただきありがとうございます
+MBC 뉴스
+KBS 뉴스
+""".split("\n") if x.strip())
+def _hallucination_key(text):
+    """归一化：去所有空白与标点、小写，用于整句精确比对。"""
+    t = re.sub(r'[\W]+', '', text or '', flags=re.UNICODE)
+    return t.lower()
+
+
+_HALLUCINATION_KEYS = frozenset(_hallucination_key(t) for t in _HALLUCINATION_TEXTS)
+
+
+def scrub_hallucination_segments(segments):
+    """剔除整句命中幻听黑名单的片段；返回 (新列表, 剔除数)。"""
+    kept, dropped = [], 0
+    for seg in segments:
+        text = (seg.get('text') or seg.get('words_text') or '')
+        key = _hallucination_key(text)
+        if key and key in _HALLUCINATION_KEYS:
+            dropped += 1
+            continue
+        kept.append(seg)
+    return kept, dropped
+
+
 def _llm_config_path():
     custom = os.environ.get('LLM_CONFIG_PATH')
     if custom:
@@ -785,7 +840,8 @@ class SubtitleGenerator:
                     _no_speech = _env_float('ASR_NO_SPEECH_THRESHOLD', 0.6)
                     _cond_prev = os.environ.get('ASR_CONDITION_ON_PREV_TEXT', '0').strip().lower() \
                         in ('1', 'true', 'yes')
-                    _hallu = os.environ.get('ASR_HALLUCINATION_SILENCE', '').strip()
+                    _hallu_raw = os.environ.get('ASR_HALLUCINATION_SILENCE', '2.0').strip().lower()
+                    _hallu_disabled = _hallu_raw in ('', '0', 'off', 'no', 'false')
 
                     # 术语表接到解码器：喂「目标词」而不是等转完再替换字符串。
                     # 之前 _apply_glossary 属于事后纠错，模型压根不知道该往哪个方向识别。
@@ -807,7 +863,7 @@ class SubtitleGenerator:
                     }
                     if _hotwords:
                         _tune['hotwords'] = _hotwords
-                    if _hallu and _word_ts and not _cond_prev:
+                    if not _hallu_disabled and _word_ts and not _cond_prev:
                         _tune['hallucination_silence_threshold'] = _env_float('ASR_HALLUCINATION_SILENCE', 2.0)
 
                     if _hotwords:
@@ -826,6 +882,14 @@ class SubtitleGenerator:
                                 "message": "canceled"}
 
                     logger.info(f"检测到的语言: {info.language}")
+
+                    # 幻听清洗（2026-10-26）：整句命中已知幻听黑名单的片段直接剔除，
+                    # 主要打击 BGM/尾奏段的「谢谢观看/Amara 字幕」类幻觉输出。
+                    if os.environ.get('ASR_SCRUB_HALLUCINATIONS', '1').strip().lower() not in ('0', 'false', 'no', 'off'):
+                        _before = len(all_segments)
+                        all_segments, _dropped = scrub_hallucination_segments(all_segments)
+                        if _dropped:
+                            logger.info(f"幻听清洗: 剔除 {_dropped} 条疑似幻听片段（{_before} -> {len(all_segments)}）")
 
                     # 收集所有片段 (支持协作式取消)
                     total_segments = 0

@@ -702,7 +702,7 @@ def health_check():
         'status': 'ok',
         'model_loaded': __import__('utils.ai_memory',fromlist=['asr_weights_loaded']).asr_weights_loaded(SubtitleGenerator._model_cache),
         'memory_mode': os.getenv('LOCAL_LLM_MEMORY_MODE','0')=='1',
-        'version': '2026.10.14.1',
+        'version': '2026.10.26.1',
         'auth_enabled': bool(_AUTH_TOKEN),
         'model_size': os.getenv('MODEL_SIZE', 'base'),
         'system_info': system_info,
@@ -2929,6 +2929,161 @@ def _enforce_hls_cache_size(max_gb=2):
         logger.error(f"HLS 缓存大小检查失败: {e}")
 
 
+
+@app.route('/api/subtitle-mux', methods=['POST'])
+def subtitle_mux():
+    """软字幕封装（2026-10-26）：字幕作为软轨封装进 MKV 容器。
+
+    与烧录的区别：视频流/音频流直接 copy（秒级、零画质损失），字幕是独立轨道，
+    播放器可开关，随时可以用 mkvextract 抽回来。产物落字幕目录，列表里标为成片。
+    """
+    try:
+        data = request.get_json()
+        if not data or 'subtitle_filename' not in data:
+            return jsonify({'success': False, 'error': '缺少字幕文件名'}), 400
+        subtitle_filename = data['subtitle_filename']
+        subtitle_path = _safe_join(app.config['SUBTITLE_FOLDER'], subtitle_filename)
+        if subtitle_path is None:
+            return jsonify({'success': False, 'error': '非法路径'}), 400
+        if not os.path.exists(subtitle_path):
+            return jsonify({'success': False, 'error': '字幕文件不存在'}), 404
+        if not subtitle_filename.lower().endswith(('.srt', '.ass', '.vtt')):
+            return jsonify({'success': False, 'error': '软字幕封装仅支持 SRT/ASS/VTT 字幕（这些格式才有可切换的软轨意义）'}), 400
+        base_name = re.sub(r'\.(srt|vtt|ass|json|txt)$', '', subtitle_filename, flags=re.IGNORECASE)
+        video_path = _find_media_by_basename(base_name)
+        if not video_path:
+            return jsonify({'success': False, 'error': '未找到匹配的视频文件。请确保视频已上传且与字幕文件同名'}), 404
+        import uuid
+        output_filename = f'{base_name}.softsub_{uuid.uuid4().hex[:8]}.mkv'
+        output_path = os.path.join(app.config['SUBTITLE_FOLDER'], output_filename)
+        task_id = f"mux_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+        with processing_tasks_lock:
+            processing_tasks[task_id] = {
+                'status': 'processing',
+                'filename': subtitle_filename,
+                'start_time': datetime.now().isoformat(),
+                'progress': 0,
+                'progress_info': '软字幕封装已启动...'
+            }
+
+        def mux_process():
+            output_path_local = output_path
+            try:
+                with processing_tasks_lock:
+                    processing_tasks[task_id]['progress'] = 10
+                    processing_tasks[task_id]['progress_info'] = '正在封装软字幕轨...'
+                # 从字幕文件名猜语言标记（.en-zh → chi；供播放器字幕菜单显示）
+                lang = 'und'
+                m = re.search(r'\.([a-z]{2,3})(?:-[a-z]{2,3})?$', os.path.splitext(subtitle_filename)[0], re.IGNORECASE)
+                if m:
+                    lang = {'zh': 'chi', 'en': 'eng', 'ja': 'jpn', 'ko': 'kor',
+                            'fr': 'fra', 'de': 'deu', 'es': 'spa', 'ru': 'rus'}.get(m.group(1).lower(), 'und')
+                sub_title = '中文字幕' if lang == 'chi' else ('English' if lang == 'eng' else 'Subtitle')
+                cmd = ['ffmpeg', '-nostdin', '-y',
+                       '-i', video_path,
+                       '-i', subtitle_path,
+                       '-map', '0:v:0', '-map', '0:a?', '-map', '1:0',
+                       '-c:v', 'copy', '-c:a', 'copy', '-c:s', 'srt',
+                       '-metadata:s:s:0', f'language={lang}',
+                       '-metadata:s:s:0', f'title={sub_title}',
+                       '-f', 'matroska', output_path_local]
+                proc = sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.PIPE, timeout=3600)
+                if proc.returncode != 0:
+                    raise RuntimeError('ffmpeg 封装失败: ' + proc.stderr.decode('utf-8', 'replace')[-300:])
+                size = os.path.getsize(output_path_local)
+                with processing_tasks_lock:
+                    processing_tasks[task_id].update({
+                        'status': 'completed', 'progress': 100, 'progress_info': '封装完成',
+                        'result': {'encoder': 'stream-copy(软字幕)', 'output_file': output_filename,
+                                   'output_path': output_path_local, 'size': size}})
+                logger.info(f"软字幕封装完成: {output_filename}")
+            except Exception as e:
+                logger.error(f"软字幕封装失败: {e}")
+                with processing_tasks_lock:
+                    processing_tasks[task_id].update({'status': 'failed', 'progress_info': '封装失败',
+                                                      'error': str(e)[:300]})
+                try:
+                    os.remove(output_path_local)
+                except OSError:
+                    pass
+
+        threading.Thread(target=mux_process, daemon=True).start()
+        return jsonify({'success': True, 'task_id': task_id, 'message': '软字幕封装任务已启动'})
+    except Exception as e:
+        logger.error(f"启动软字幕封装失败: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# Whisper 模型管理（2026-10-26）：预下载常用档位 / 删除不用的省空间。
+_WHISPER_ALLOWED = ('tiny', 'base', 'small', 'medium', 'turbo', 'large-v3-turbo', 'large-v3', 'large')
+_model_dl_status = {}
+_model_dl_lock = threading.Lock()
+
+def _whisper_cache_dirs(name):
+    """返回某档位可能落在的 HF cache 目录（Systran 官方 + mobius turbo 镜像）。"""
+    cache_name = 'large-v3' if name == 'large' else name
+    base = '/root/.cache/huggingface/hub'
+    return [
+        os.path.join(base, f'models--Systran--faster-whisper-{cache_name}'),
+        os.path.join(base, f'models--mobiuslabsgmbh--faster-whisper-{cache_name}'),
+    ]
+
+@app.route('/api/models/whisper/download', methods=['POST'])
+def download_whisper_model():
+    """后台预下载指定档位的 Whisper 模型到 HF cache。"""
+    try:
+        data = request.get_json() or {}
+        name = (data.get('model') or '').strip()
+        if name not in _WHISPER_ALLOWED:
+            return jsonify({'success': False, 'error': f'不支持的模型档位: {name}'}), 400
+        with _model_dl_lock:
+            running = {k: v for k, v in _model_dl_status.items() if v.get('status') == 'downloading'}
+            if name in running:
+                return jsonify({'success': False, 'error': '该模型正在下载中'}), 409
+            if len(running) >= 1:
+                return jsonify({'success': False, 'error': '已有模型在下载，请稍候'}), 409
+            _model_dl_status[name] = {'status': 'downloading', 'started': datetime.now().isoformat(), 'error': None}
+
+        def dl_process():
+            try:
+                from faster_whisper import WhisperModel
+                WhisperModel(name, device='cpu', compute_type='int8')
+                with _model_dl_lock:
+                    _model_dl_status[name] = {'status': 'done', 'error': None,
+                                              'finished': datetime.now().isoformat()}
+                logger.info(f"Whisper 模型预下载完成: {name}")
+            except Exception as e:
+                logger.error(f"Whisper 模型预下载失败 {name}: {e}")
+                with _model_dl_lock:
+                    _model_dl_status[name] = {'status': 'failed', 'error': str(e)[:300]}
+
+        threading.Thread(target=dl_process, daemon=True).start()
+        return jsonify({'success': True, 'message': f'模型 {name} 下载已启动'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/models/whisper/<name>', methods=['DELETE'])
+def delete_whisper_model(name):
+    """删除已缓存的 Whisper 模型目录以释放空间。"""
+    try:
+        if name not in _WHISPER_ALLOWED:
+            return jsonify({'success': False, 'error': f'不支持的模型档位: {name}'}), 400
+        with _model_dl_lock:
+            if _model_dl_status.get(name, {}).get('status') == 'downloading':
+                return jsonify({'success': False, 'error': '该模型正在下载中，无法删除'}), 409
+        removed = []
+        for d in _whisper_cache_dirs(name):
+            if os.path.isdir(d):
+                import shutil
+                shutil.rmtree(d, ignore_errors=True)
+                removed.append(os.path.basename(d))
+        if not removed:
+            return jsonify({'success': False, 'error': '该模型未在本地缓存'}), 404
+        logger.info(f"Whisper 模型已删除: {name} ({', '.join(removed)})")
+        return jsonify({'success': True, 'message': f'模型 {name} 已删除', 'removed': removed})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route('/api/cleanup', methods=['POST'])
 def api_cleanup():
     """手动触发清理旧文件"""
@@ -3290,6 +3445,8 @@ def models_info():
             'success': True,
             'translator_models': translators,
             'whisper_models': whisper,
+            'whisper_downloads': dict(_model_dl_status),
+            'whisper_allowed': list(_WHISPER_ALLOWED),
             'worker_count': int(os.environ.get('TASK_WORKER_COUNT', '2')),
             'resource_mode': os.environ.get('RESOURCE_MODE', 'balanced'),
         })

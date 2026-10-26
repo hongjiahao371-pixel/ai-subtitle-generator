@@ -36,6 +36,7 @@
                     <button class="btn btn-secondary btn-small" onclick="showTokenSettings()" title="访问令牌">
                         Token
                     </button>
+                    <button class="btn btn-secondary btn-small" id="langToggle" onclick="toggleUiLanguage()" title="Switch to English">EN</button>
                     <!-- 2026-06-22 新增：提取字幕（仅当在 NAS 文件区点了带字幕视频时才用）-->
                     <!-- 此按钮只在弹层里出现，不放 nav -->
 
@@ -541,12 +542,14 @@
                     <button class="btn btn-secondary" onclick="runCleanup('failed-tasks')">清理失败任务</button>
                     <button class="btn btn-secondary" onclick="runCleanup('history')">清空历史</button>
                     <button class="btn btn-secondary" onclick="loadModelsInfo()">模型信息</button>
+                    <button class="btn btn-secondary" onclick="showWhisperModels()">Whisper 模型管理</button>
                     <button class="btn btn-secondary" onclick="loadResourceProfile()">资源模式</button>
                     <button class="btn btn-secondary" onclick="showGlossaryManager()">术语表</button>
                     <button class="btn btn-secondary" onclick="showNotificationSettings()">通知</button>
                     <button class="btn btn-secondary" onclick="showLlmSettings()">AI 翻译</button>
                     <button class="btn btn-secondary" onclick="loadQueueReport()">任务报告</button>
                 </div>
+                <div id="whisperModelsBox" style="display:none;margin-top:14px"></div>
                 <pre id="toolsOutput" class="tools-output"></pre>
             </div>
         </div>
@@ -737,6 +740,7 @@
 
     <div class="toast" id="toast"></div>
     <script src="/static/js/vendor/hls.min.js?v=20261011-r4.1"></script>
-    <script src="/static/js/app.js?v=20261011-r4.1"></script>
+    <script src="/static/js/i18n-en.js?v=20261026-r5.1"></script>
+    <script src="/static/js/app.js?v=20261026-r5.1"></script>
 </body>
 </html>
