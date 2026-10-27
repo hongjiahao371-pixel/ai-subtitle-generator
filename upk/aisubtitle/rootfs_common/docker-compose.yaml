@@ -1,6 +1,6 @@
 services:
   ai-subtitle:
-    image: aisubtitle/app:upk-20261026
+    image: aisubtitle/app:upk-20261028
     restart: unless-stopped
     depends_on:
       - subtitle-translator
