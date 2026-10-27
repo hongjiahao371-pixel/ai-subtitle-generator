@@ -2,6 +2,54 @@
 
 > 提交开发者门户时，把对应语言文本粘贴到 ReleaseNote（上限 5000 字符）。
 
+## zh-CN（v1.2.0）
+
+AI 字幕生成器 v1.2.0。
+
+本版新增：
+- 监控自动字幕：指定监控目录与运行时段，新视频落地自动生成字幕（文件按需下载模型、自动入队、防重复）
+- 字幕推送到媒体库：一键把字幕按播放器规范（同名/.zh.srt）写入媒体库目录，Jellyfin/Emby 刷新即见
+- 说话人命名：把【说话人N】批量替换为真实姓名，映射自动记忆
+- 会议纪要：转写稿一键生成分议题、含待办清单的结构化纪要
+- 云端 ASR 引擎（可选）：支持任意 OpenAI 兼容转写接口，失败自动回退本地；说话人分离任务始终本地
+- 全局术语库：跨视频共享的人名/品牌术语表，自动应用到所有任务
+- 界面英文一键切换；Whisper 模型管理面板（预下载/删除）；软字幕封装（MKV 软轨）；幻听字幕自动清洗；生成设置记忆与多项交互优化
+
+既有功能：Whisper 本地语音识别（tiny~large-v3）、中英双语烧录（Intel 核显自动硬加速）、字幕编辑与质检、SRT/ASS/VTT/JSON/TXT 互转、说话人分离、NAS 媒体库浏览。
+
+使用说明：
+- 安装时选择媒体库目录；「推送」功能会向该目录写入字幕文件（视频文件永不改动）
+- 首次使用按需从公共镜像源下载所选模型；语音识别、翻译默认全部本机完成
+- 访问 http://NAS_IP:9000，仅监听局域网
+
+隐私说明：本应用不提供云服务；素材、模型与结果保存在本机。仅当您配置云端 LLM/ASR 接口时，对应文本/音频才会发送到您指定的服务地址。
+
+## en-US (v1.2.0)
+
+AI Subtitle Generator v1.2.0.
+
+New in this version:
+- Watch-folder auto subtitles: point it at a folder and new videos are transcribed automatically (models download on demand, duplicate-safe, run-window scheduling)
+- Push to media library: writes subtitles next to your videos with player-standard naming — visible in Jellyfin/Emby after a refresh
+- Speaker naming: replace 【Speaker N】 labels with real names in bulk; mappings are remembered
+- Meeting minutes: structured minutes with topics and to-dos from any transcript
+- Cloud ASR engine (optional): any OpenAI-compatible transcription endpoint, automatic local fallback; diarization always runs locally
+- Global glossary: shared names/brand terms applied to every task
+- One-click English UI; Whisper model manager (pre-download/delete); soft-subtitle muxing (MKV); hallucination scrubbing; settings persistence and many UX improvements
+
+Existing: local Whisper recognition (tiny–large-v3), bilingual burning with Intel iGPU acceleration, editor & QC, SRT/ASS/VTT/JSON/TXT conversion, speaker diarization, NAS media browsing.
+
+Notes:
+- Choose your media library folder at install; Push writes subtitle files there (video files are never modified)
+- Models download on demand from public mirrors; recognition and translation run locally by default
+- Served at http://NAS_IP:9000, LAN only
+
+Privacy: no cloud service. Only if you configure a cloud LLM/ASR endpoint does the corresponding text/audio go to the address you specify.
+
+# AI 字幕生成器 UPK 发布说明（商店提交用）
+
+> 提交开发者门户时，把对应语言文本粘贴到 ReleaseNote（上限 5000 字符）。
+
 ## zh-CN（v1.0.0 build 1）
 
 AI 字幕生成器 v1.0.0 首发。

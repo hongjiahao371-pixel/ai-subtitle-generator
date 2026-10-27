@@ -1,6 +1,6 @@
 services:
   ai-subtitle:
-    image: aisubtitle/app:upk-20261021
+    image: aisubtitle/app:upk-20261026
     restart: unless-stopped
     depends_on:
       - subtitle-translator
@@ -46,7 +46,7 @@ services:
         {
           "enabled": true,
           "base_url": "http://subtitle-translator:8080/v1",
-          "api_key": "LOCAL_RANDOM_TOKEN_PLACEHOLDER",
+          "api_key": "3M1ZiXpgO4kFNcTsRjE_c3ip6yM0Qfx-TJTb3oGT2d8",
           "model": "HY-MT2-7B",
           "provider": "nas-local"
         }
@@ -64,7 +64,7 @@ services:
       - ./translator_models:/app/translator_models
       - ./audio:/app/audio
       - ./data:/app/data
-      - ${MEDIA_DIR}:/nas/videos:ro
+      - ${MEDIA_DIR}:/nas/videos
       - /usr/lib/x86_64-linux-gnu/dri:/hostdri:ro
     devices:
       - /dev/dri:/dev/dri
@@ -88,7 +88,7 @@ services:
     entrypoint:
       - /bin/sh
       - -c
-      - exec /opt/llama/llama-server --model /models/Hy-MT2-7B-Q4_K_M.gguf --alias HY-MT2-7B --host 0.0.0.0 --port 8080 --ctx-size 2048 --threads 3 --threads-batch 3 --parallel 1 --n-gpu-layers 0 --api-key LOCAL_RANDOM_TOKEN_PLACEHOLDER --sleep-idle-seconds 15
+      - exec /opt/llama/llama-server --model /models/Hy-MT2-7B-Q4_K_M.gguf --alias HY-MT2-7B --host 0.0.0.0 --port 8080 --ctx-size 2048 --threads 3 --threads-batch 3 --parallel 1 --n-gpu-layers 0 --api-key 3M1ZiXpgO4kFNcTsRjE_c3ip6yM0Qfx-TJTb3oGT2d8 --sleep-idle-seconds 15
 
   subtitle-editor:
     image: aisubtitle/llamacpp:upk-20261016
@@ -96,4 +96,4 @@ services:
     entrypoint:
       - /bin/sh
       - -c
-      - exec /opt/llama/llama-server --model /models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf --alias Qwen3-4B-Instruct-2507 --host 0.0.0.0 --port 8080 --ctx-size 4096 --threads 3 --threads-batch 3 --parallel 1 --n-gpu-layers 0 --api-key LOCAL_RANDOM_TOKEN_PLACEHOLDER --sleep-idle-seconds 15 --reasoning-budget 0 --reasoning-format deepseek
+      - exec /opt/llama/llama-server --model /models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf --alias Qwen3-4B-Instruct-2507 --host 0.0.0.0 --port 8080 --ctx-size 4096 --threads 3 --threads-batch 3 --parallel 1 --n-gpu-layers 0 --api-key 3M1ZiXpgO4kFNcTsRjE_c3ip6yM0Qfx-TJTb3oGT2d8 --sleep-idle-seconds 15 --reasoning-budget 0 --reasoning-format deepseek

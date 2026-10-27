@@ -1,6 +1,6 @@
 spec_version: 2.1
 app_id: com.jvsheng.aisubtitle
-version: 1.0.0
+version: 1.2.0
 support_arch:
   - amd64
 is_docker_app: true
@@ -28,10 +28,10 @@ parameters:
     i18n:
       zh-CN:
         name: 视频媒体目录
-        description: 请选择存放待处理视频的目录。该目录会以只读方式挂载给应用，用于在应用内直接浏览并选取 NAS 上的视频生成字幕；应用不会修改该目录中的任何文件。建议选择视频媒体库专用目录。
+        description: 请选择存放待处理视频的目录（即媒体库目录）。应用浏览并选取其中的视频生成字幕；仅当您在应用内点击「推送」时，才会向该目录写入字幕文件（不改动手视频与其他文件）。建议选择视频媒体库专用目录。
       en-US:
         name: Video media folder
-        description: Choose the folder that stores your videos. It is mounted read-only so the app can browse and pick NAS videos for subtitling; the app never modifies files in it. A dedicated media library folder is recommended.
+        description: Choose your video library folder. The app browses and picks videos from it for subtitling; it writes subtitle files there only when you explicitly click Push, and never touches your video files. A dedicated media library folder is recommended.
 i18n:
   zh-CN:
     name: AI 字幕生成器

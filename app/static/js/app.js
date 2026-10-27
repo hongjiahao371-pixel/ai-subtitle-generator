@@ -184,6 +184,33 @@ function getGenerationOptions() {
 // Initialization moved to bottom of file
 
 // 切换文件来源
+// ==== 生成设置持久化（2026-10-26）：记住上次的模型/语言/格式等选择 ====
+var GEN_SETTINGS_IDS = ['modelSelect', 'languageSelect', 'formatSelect', 'translateSelect',
+                        'saveStrategySelect', 'outputNamingSelect'];
+function saveGenSettings() {
+    try {
+        var st = {};
+        GEN_SETTINGS_IDS.forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el) st[id] = el.value;
+        });
+        var lb = document.getElementById('splitMaxChars');
+        if (lb) st.sentenceLength = lb.value;
+        localStorage.setItem('aisub_genset', JSON.stringify(st));
+    } catch (e) {}
+}
+function restoreGenSettings() {
+    try {
+        var st = JSON.parse(localStorage.getItem('aisub_genset') || '{}');
+        GEN_SETTINGS_IDS.forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el && st[id]) el.value = st[id];
+        });
+        var lb = document.getElementById('splitMaxChars');
+        if (lb && st.sentenceLength) lb.value = st.sentenceLength;
+    } catch (e) {}
+}
+
 function toggleSource() {
     const selected = document.querySelector('input[name="source"]:checked').value;
     currentSource = selected;
@@ -205,6 +232,11 @@ function toggleSource() {
         if (nasPathSection) nasPathSection.style.display = 'block';
         uploadedFile = null;
         batchFiles = [];
+        // 首次切入自动加载目录列表（2026-10-26：省掉手动点「刷新」的死步骤）
+        if (typeof listNasFiles === 'function' && !window.__nasAutoLoaded) {
+            window.__nasAutoLoaded = true;
+            listNasFiles();
+        }
     }
 }
 
@@ -353,22 +385,26 @@ function initUploadArea() {
     fileInput.addEventListener('change', handleFileSelect);
 
     // 拖拽上传
+    // 生成设置：启动恢复 + 变化即存
+    restoreGenSettings();
+    GEN_SETTINGS_IDS.concat(['splitMaxChars']).forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.addEventListener('change', saveGenSettings);
+    });
+
     uploadArea.addEventListener('dragover', (e) => {
         e.preventDefault();
-        uploadArea.style.borderColor = '#357abd';
-        uploadArea.style.background = '#e8f4ff';
+        uploadArea.classList.add('dragover');
     });
 
     uploadArea.addEventListener('dragleave', (e) => {
         e.preventDefault();
-        uploadArea.style.borderColor = '#4a90e2';
-        uploadArea.style.background = '#f8f9fa';
+        uploadArea.classList.remove('dragover');
     });
 
     uploadArea.addEventListener('drop', (e) => {
         e.preventDefault();
-        uploadArea.style.borderColor = '#4a90e2';
-        uploadArea.style.background = '#f8f9fa';
+        uploadArea.classList.remove('dragover');
         
         const files = e.dataTransfer.files;
         if (files.length > 0) {
@@ -510,6 +546,10 @@ async function generateSubtitle() {
 
 // 显示状态区域
 function showStatusSection(status) {
+    try {
+        var dot = document.getElementById('navTaskDot');
+        if (dot) dot.className = (status === 'processing') ? 'running' : '';
+    } catch (e) {}
     statusSection.style.display = 'block';
     const statusCard = statusSection.querySelector('.status-card');
     
@@ -834,30 +874,44 @@ function renderSubtitles(subtitles) {
                             下载
                         </button>
                         <span class="action-divider"></span>
-                        <button class="btn btn-ghost btn-small subtitle-action" data-action="burn" data-filename="${filenameAttr}" title="烧录到视频">
-                            烧录
+                        <button class="btn btn-ghost btn-small more-toggle" onclick="toggleMoreActions(this)" title="更多操作">
+                            更多
                         </button>
-                        <button class="btn btn-ghost btn-small subtitle-action" data-action="mux" data-filename="${filenameAttr}" title="封装软字幕到 MKV（不重编码，播放器可开关字幕）">
-                            封装
-                        </button>
-                        <button class="btn btn-ghost btn-small subtitle-action" data-action="quality" data-filename="${filenameAttr}">
-                            质检
-                        </button>
-                        <button class="btn btn-ghost btn-small subtitle-action" data-action="convert" data-filename="${filenameAttr}">
-                            转换
-                        </button>
-                        <button class="btn btn-ghost btn-small subtitle-action" data-action="translate" data-filename="${filenameAttr}">
-                            翻译
-                        </button>
-                        <button class="btn btn-ghost btn-small subtitle-action" data-action="summary" data-filename="${filenameAttr}" title="AI 生成内容总结">
-                            总结
-                        </button>
-                        <button class="btn btn-ghost btn-small subtitle-action" data-action="rename" data-filename="${filenameAttr}">
-                            重命名
-                        </button>
-                        <button class="btn btn-ghost-danger btn-small subtitle-action" data-action="delete" data-filename="${filenameAttr}">
-                            删除
-                        </button>
+                        <span class="more-group">
+                            <button class="btn btn-ghost btn-small subtitle-action" data-action="burn" data-filename="${filenameAttr}" title="烧录到视频">
+                                烧录
+                            </button>
+                            <button class="btn btn-ghost btn-small subtitle-action" data-action="mux" data-filename="${filenameAttr}" title="封装软字幕到 MKV（不重编码，播放器可开关字幕）">
+                                封装
+                            </button>
+                            <button class="btn btn-ghost btn-small subtitle-action" data-action="quality" data-filename="${filenameAttr}">
+                                质检
+                            </button>
+                            <button class="btn btn-ghost btn-small subtitle-action" data-action="convert" data-filename="${filenameAttr}">
+                                转换
+                            </button>
+                            <button class="btn btn-ghost btn-small subtitle-action" data-action="translate" data-filename="${filenameAttr}">
+                                翻译
+                            </button>
+                            <button class="btn btn-ghost btn-small subtitle-action" data-action="summary" data-filename="${filenameAttr}" title="AI 生成内容总结">
+                                总结
+                            </button>
+                            <button class="btn btn-ghost btn-small subtitle-action" data-action="minutes" data-filename="${filenameAttr}" title="AI 生成会议纪要">
+                                纪要
+                            </button>
+                            <button class="btn btn-ghost btn-small subtitle-action" data-action="push" data-filename="${filenameAttr}" title="推送到媒体库目录（按播放器规范命名）">
+                                推送
+                            </button>
+                            <button class="btn btn-ghost btn-small subtitle-action" data-action="speakers" data-filename="${filenameAttr}" title="说话人命名">
+                                说话人
+                            </button>
+                            <button class="btn btn-ghost btn-small subtitle-action" data-action="rename" data-filename="${filenameAttr}">
+                                重命名
+                            </button>
+                            <button class="btn btn-ghost-danger btn-small subtitle-action" data-action="delete" data-filename="${filenameAttr}">
+                                删除
+                            </button>
+                        </span>
                     </div>
                 </div>
             </div>
@@ -869,15 +923,23 @@ function renderSubtitles(subtitles) {
             event.stopPropagation();
             var filename = button.getAttribute('data-filename') || '';
             var action = button.getAttribute('data-action');
+            var row = button.closest('.subtitle-actions');
+            if (row && row.classList.contains('open')) row.classList.remove('open');
             if (action === 'preview') previewSubtitle(filename);
             else if (action === 'edit') editSubtitle(filename);
             else if (action === 'download') downloadSubtitle(filename);
             else if (action === 'burn') burnSubtitle(filename);
             else if (action === 'mux') muxSubtitle(filename);
-            else if (action === 'quality') qualitySubtitle(filename);
+            else if (action === 'quality') {
+                var _isBilingual = /(-zh|-en|zh-en|en-zh|双语)/i.test(filename);
+                if (_isBilingual) qcCompare(filename); else qualitySubtitle(filename);
+            }
             else if (action === 'convert') convertSubtitle(filename);
             else if (action === 'translate') translateSubtitle(filename);
-            else if (action === 'summary') summarizeSubtitle(filename);
+            else if (action === 'summary') summarizeSubtitle(filename, 'summary');
+            else if (action === 'minutes') summarizeSubtitle(filename, 'minutes');
+            else if (action === 'push') pushSubtitle(filename);
+            else if (action === 'speakers') speakerNaming(filename);
             else if (action === 'rename') renameSubtitle(filename);
             else if (action === 'delete') deleteSubtitle(filename);
         });
@@ -1151,6 +1213,11 @@ async function doBurnSubtitle(subtitleFilename, style) {
     } catch (e) {
         showToast('烧录失败: ' + e.message, 'error');
     }
+}
+
+function toggleMoreActions(btn) {
+    var row = btn.closest('.subtitle-actions');
+    if (row) row.classList.toggle('open');
 }
 
 // ==== 软字幕封装（2026-10-26）：字幕作为软轨封装进 MKV，不重编码、播放器可开关 ====
@@ -1442,23 +1509,11 @@ function initBatchUploadArea() {
     batchFileInput.addEventListener('change', handleBatchFileSelect);
 
     // 拖拽上传
-    batchUploadArea.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        batchUploadArea.style.borderColor = '#357abd';
-        batchUploadArea.style.background = '#e8f4ff';
-    });
+    batchUploadArea.addEventListener('dragover', (e) => { e.preventDefault(); batchUploadArea.classList.add('dragover'); });
 
-    batchUploadArea.addEventListener('dragleave', (e) => {
-        e.preventDefault();
-        batchUploadArea.style.borderColor = '#4a90e2';
-        batchUploadArea.style.background = '#f8f9fa';
-    });
+    batchUploadArea.addEventListener('dragleave', (e) => { e.preventDefault(); batchUploadArea.classList.remove('dragover'); });
 
-    batchUploadArea.addEventListener('drop', (e) => {
-        e.preventDefault();
-        batchUploadArea.style.borderColor = '#4a90e2';
-        batchUploadArea.style.background = '#f8f9fa';
-        
+    batchUploadArea.addEventListener('drop', (e) => { e.preventDefault(); batchUploadArea.classList.remove('dragover');
         const files = Array.from(e.dataTransfer.files);
         handleBatchFiles(files);
     });
@@ -4017,11 +4072,13 @@ async function testLlmConfig() {
 
 // ===== AI 转写摘要 =====
 let _lastSummaryFile = null;
-async function summarizeSubtitle(filename) {
+async function summarizeSubtitle(filename, mode) {
+    mode = mode || 'summary';
     const modal = document.getElementById('summaryModal');
     if (!modal) return;
     _lastSummaryFile = filename;
-    document.getElementById('summaryFileName').textContent = filename;
+    _lastSummaryMode = mode;
+    document.getElementById('summaryFileName').textContent = filename + (mode === 'minutes' ? '（会议纪要）' : '');
     document.getElementById('summaryContent').textContent = '';
     const status = document.getElementById('summaryStatus');
     const dl = document.getElementById('summaryDownloadBtn');
@@ -4033,7 +4090,7 @@ async function summarizeSubtitle(filename) {
         const resp = await apiFetch('/api/summary', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ filename: filename })
+            body: JSON.stringify({ filename: filename, mode: mode || 'summary' })
         });
         const data = await resp.json();
         if (data.success) {
@@ -4139,4 +4196,364 @@ async function deleteFromLibrary(filename) {
             showToast('删除失败: ' + e.message, 'error');
         }
     }, '删除', true);
+}
+
+// ============================================================================
+// v1.2.0：字幕推送 / 说话人命名 / 监控自动字幕 / 云端 ASR / 双语对照质检
+// ============================================================================
+
+// ---- 字幕推送到媒体库 ----
+var _pushFile = null;
+
+function pushSubtitle(filename) {
+    _pushFile = filename;
+    var modal = document.getElementById('pushModal');
+    if (!modal) return;
+    document.getElementById('pushFileName').textContent = filename;
+    var dirInput = document.getElementById('pushTargetDir');
+    dirInput.value = localStorage.getItem('aisub_push_dir') || '';
+    modal.style.display = 'flex';
+}
+
+function closePushModal() {
+    var m = document.getElementById('pushModal');
+    if (m) m.style.display = 'none';
+}
+
+async function doPushSubtitle() {
+    var dir = document.getElementById('pushTargetDir').value.trim();
+    var mode = document.getElementById('pushMode').value;
+    if (!dir) { showToast('请填写目标目录', 'error'); return; }
+    try {
+        var resp = await apiFetch('/api/push-subtitle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: _pushFile, target_dir: dir, mode: mode })
+        });
+        var r = await resp.json();
+        if (r.success) {
+            localStorage.setItem('aisub_push_dir', dir);
+            showToast('已推送到媒体库', 'success');
+            closePushModal();
+        } else {
+            showToast('推送失败: ' + (r.error || ''), 'error');
+        }
+    } catch (e) { showToast('推送失败: ' + e.message, 'error'); }
+}
+
+// ---- 说话人命名 ----
+var _speakerFile = null;
+
+function speakerNaming(filename) {
+    _speakerFile = filename;
+    var modal = document.getElementById('speakerModal');
+    if (!modal) return;
+    document.getElementById('speakerFileName').textContent = filename;
+    document.getElementById('speakerRows').innerHTML = '<div class="loading-spinner">加载中...</div>';
+    modal.style.display = 'flex';
+    apiFetch('/api/speaker-names/' + encodeURIComponent(filename))
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (!data.success) { document.getElementById('speakerRows').innerHTML = '<p>' + escapeHtml(data.error || '加载失败') + '</p>'; return; }
+            var speakers = data.speakers || [];
+            var saved = data.saved || {};
+            if (!speakers.length) {
+                document.getElementById('speakerRows').innerHTML = '<p style="color:var(--text-secondary,#98A2B3)">该字幕没有【说话人N】标记。请先用带说话人分离的设置重新生成字幕。</p>';
+                return;
+            }
+            var html = '';
+            speakers.forEach(function(spk) {
+                var val = saved[spk] || '';
+                html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">' +
+                    '<span style="min-width:84px;font-weight:600">' + escapeHtml(spk) + '</span>' +
+                    '<span>→</span>' +
+                    '<input type="text" class="speaker-name-input" data-spk="' + escapeAttr(spk) + '" value="' + escapeAttr(val) + '" placeholder="真实姓名" style="flex:1">' +
+                    '</div>';
+            });
+            document.getElementById('speakerRows').innerHTML = html;
+        })
+        .catch(function(e) {
+            document.getElementById('speakerRows').innerHTML = '<p>' + escapeHtml(e.message) + '</p>';
+        });
+}
+
+function closeSpeakerModal() {
+    var m = document.getElementById('speakerModal');
+    if (m) m.style.display = 'none';
+}
+
+async function doSpeakerNaming() {
+    var inputs = document.querySelectorAll('#speakerRows .speaker-name-input');
+    var mapping = {};
+    inputs.forEach(function(inp) {
+        var v = inp.value.trim();
+        if (v) mapping[inp.getAttribute('data-spk')] = v;
+    });
+    if (!Object.keys(mapping).length) { showToast('请至少填写一个姓名', 'error'); return; }
+    try {
+        var resp = await apiFetch('/api/speaker-names/' + encodeURIComponent(_speakerFile), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mapping: mapping })
+        });
+        var r = await resp.json();
+        if (r.success) {
+            showToast('已替换 ' + r.replaced + ' 处', 'success');
+            closeSpeakerModal();
+            loadSubtitles();
+        } else {
+            showToast('失败: ' + (r.error || ''), 'error');
+        }
+    } catch (e) { showToast('失败: ' + e.message, 'error'); }
+}
+
+// ---- 监控自动字幕 ----
+function showWatchSettings() {
+    var modal = document.getElementById('watchModal');
+    if (!modal) return;
+    modal.style.display = 'flex';
+    apiFetch('/api/watch-settings')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var c = data.config || {};
+            document.getElementById('watchEnabled').checked = !!c.enabled;
+            document.getElementById('watchDir').value = c.dir || '';
+            document.getElementById('watchModel').value = c.model || 'small';
+            document.getElementById('watchTranslate').value = c.translate_to || '';
+            document.getElementById('watchBilingual').checked = !!c.bilingual;
+            document.getElementById('watchDiarize').checked = !!c.diarize;
+            document.getElementById('watchWindow').value = c.window || '';
+            document.getElementById('watchStableAge').value = c.stable_age || 300;
+            var st = c.state || {};
+            var last = st.last_scan ? st.last_scan.replace('T', ' ').slice(0, 19) : '从未';
+            var lastR = st.last_result || {};
+            document.getElementById('watchState').textContent =
+                '上次扫描: ' + last + ' · 扫描 ' + (lastR.scanned || 0) + ' 个 · 入队 ' + (lastR.enqueued || 0) + ' 个';
+        })
+        .catch(function(e) { showToast('读取监控设置失败: ' + e.message, 'error'); });
+}
+
+function closeWatchModal() {
+    var m = document.getElementById('watchModal');
+    if (m) m.style.display = 'none';
+}
+
+async function saveWatchSettings() {
+    var payload = {
+        enabled: document.getElementById('watchEnabled').checked,
+        dir: document.getElementById('watchDir').value.trim(),
+        model: document.getElementById('watchModel').value,
+        translate_to: document.getElementById('watchTranslate').value || null,
+        bilingual: document.getElementById('watchBilingual').checked,
+        diarize: document.getElementById('watchDiarize').checked,
+        window: document.getElementById('watchWindow').value.trim(),
+        stable_age: parseInt(document.getElementById('watchStableAge').value, 10) || 300
+    };
+    try {
+        var resp = await apiFetch('/api/watch-settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        var r = await resp.json();
+        if (r.success) {
+            showToast('监控设置已保存' + (payload.enabled ? '，扫描线程已启动' : ''), 'success');
+            closeWatchModal();
+        } else {
+            showToast(r.error || '保存失败', 'error');
+        }
+    } catch (e) { showToast('保存失败: ' + e.message, 'error'); }
+}
+
+async function watchScanNow() {
+    try {
+        var resp = await apiFetch('/api/watch-scan', { method: 'POST' });
+        var r = await resp.json();
+        if (r.success) {
+            var res = r.result || {};
+            showToast('扫描完成: ' + (res.scanned || 0) + ' 个文件, 入队 ' + (res.enqueued || 0), 'info');
+            showWatchSettings();
+        } else {
+            showToast(r.error || '扫描失败', 'error');
+        }
+    } catch (e) { showToast('扫描失败: ' + e.message, 'error'); }
+}
+
+// ---- 云端 ASR ----
+function showAsrSettings() {
+    var modal = document.getElementById('asrModal');
+    if (!modal) return;
+    modal.style.display = 'flex';
+    apiFetch('/api/asr-config')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var c = data.config || {};
+            document.getElementById('asrEnabled').checked = !!c.enabled;
+            document.getElementById('asrBaseUrl').value = c.base_url || '';
+            document.getElementById('asrModel').value = c.model || '';
+            document.getElementById('asrApiKey').value = '';
+            document.getElementById('asrApiKey').placeholder = c.api_key_masked || 'sk-...';
+        })
+        .catch(function(e) { showToast('读取云端 ASR 配置失败: ' + e.message, 'error'); });
+}
+
+function closeAsrModal() {
+    var m = document.getElementById('asrModal');
+    if (m) m.style.display = 'none';
+}
+
+async function saveAsrSettings() {
+    var payload = {
+        enabled: document.getElementById('asrEnabled').checked,
+        base_url: document.getElementById('asrBaseUrl').value.trim(),
+        model: document.getElementById('asrModel').value.trim(),
+        api_key: document.getElementById('asrApiKey').value.trim()
+    };
+    try {
+        var resp = await apiFetch('/api/asr-config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        var r = await resp.json();
+        if (r.success) {
+            showToast('云端 ASR 配置已保存', 'success');
+            closeAsrModal();
+        } else {
+            showToast(r.error || '保存失败', 'error');
+        }
+    } catch (e) { showToast('保存失败: ' + e.message, 'error'); }
+}
+
+// ---- 双语对照质检 ----
+var _qcFile = null;
+var _qcCues = [];
+
+function parseSrtCues(text) {
+    var cues = [];
+    var blocks = text.replace(/\r/g, '').split(/\n\n+/);
+    blocks.forEach(function(b) {
+        var lines = b.split('\n').filter(function(l) { return l.trim() !== ''; });
+        if (lines.length < 2) return;
+        var idx = 0;
+        if (/^\d+$/.test(lines[0].trim())) idx = 1;
+        var tm = lines[idx] || '';
+        var mm = tm.match(/(\d{2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[,.](\d{3})/);
+        if (!mm) return;
+        var toSec = function(h, m, s, ms) { return (+h) * 3600 + (+m) * 60 + (+s) + (+ms) / 1000; };
+        var start = toSec(mm[1], mm[2], mm[3], mm[4]);
+        var end = toSec(mm[5], mm[6], mm[7], mm[8]);
+        var textLines = lines.slice(idx + 1).filter(function(l) { return l.trim() !== ''; });
+        cues.push({ start: start, end: end, lines: textLines });
+    });
+    return cues;
+}
+
+function isMostlyCJK(s) {
+    var cjk = (s.match(/[\u4e00-\u9fff]/g) || []).length;
+    var latin = (s.match(/[A-Za-z]/g) || []).length;
+    return cjk > latin;
+}
+
+async function qcCompare(filename) {
+    _qcFile = filename;
+    _qcCues = [];
+    var modal = document.getElementById('qcCompareModal');
+    if (!modal) return;
+    document.getElementById('qcCompareFile').textContent = filename;
+    document.getElementById('qcCompareBody').innerHTML = '<div class="loading-spinner">加载与质检中...</div>';
+    modal.style.display = 'flex';
+    try {
+        var resp = await apiFetch('/api/download/' + encodeURIComponent(filename));
+        var text = await resp.text();
+        var cues = parseSrtCues(text);
+        // 仅对双语（既有中文又有英文行的文件）启用对照视图
+        var hasZh = cues.some(function(c) { return c.lines.some(isMostlyCJK); });
+        var hasEn = cues.some(function(c) { return c.lines.some(function(l) { return !isMostlyCJK(l) && /[A-Za-z]/.test(l); }); });
+        if (!hasZh || !hasEn) {
+            document.getElementById('qcCompareBody').innerHTML = '<p style="color:var(--text-secondary,#98A2B3)">该字幕不是双语文件（需要中英混排），请直接用编辑器。</p>';
+            return;
+        }
+        var qResp = await apiFetch('/api/subtitle-quality/' + encodeURIComponent(filename));
+        var qData = await qResp.json();
+        var issuesByIndex = {};
+        ((qData.report || {}).issues || []).forEach(function(it) {
+            var k = it.index;
+            (issuesByIndex[k] = issuesByIndex[k] || []).push(it);
+        });
+        _qcCues = cues.map(function(c, i) {
+            var zh = '', en = [];
+            c.lines.forEach(function(l) {
+                if (isMostlyCJK(l)) zh = (zh ? zh + ' ' : '') + l;
+                else en.push(l);
+            });
+            return { start: c.start, end: c.end, en: en.join(' '), zh: zh, issues: issuesByIndex[i] || [], idx: i };
+        });
+        renderQcCompare();
+    } catch (e) {
+        document.getElementById('qcCompareBody').innerHTML = '<p>' + escapeHtml(e.message) + '</p>';
+    }
+}
+
+function renderQcCompare() {
+    var html = '<table style="width:100%;border-collapse:collapse;font-size:0.88rem">' +
+        '<tr style="position:sticky;top:0;background:var(--bg-secondary,#1A1614)">' +
+        '<th style="text-align:left;padding:6px;width:110px">时间</th>' +
+        '<th style="text-align:left;padding:6px">原文 (EN)</th>' +
+        '<th style="text-align:left;padding:6px">译文 (ZH，可编辑)</th>' +
+        '<th style="text-align:left;padding:6px;width:180px">质检提示</th></tr>';
+    _qcCues.forEach(function(c) {
+        var warn = '';
+        (c.issues || []).forEach(function(it) {
+            warn += '<div style="color:' + (it.severity === 'error' ? 'var(--danger,#e74c3c)' : '#e6a23c') + '">' +
+                escapeHtml(it.message || it.type || '') + '</div>';
+        });
+        html += '<tr style="border-top:1px solid var(--border,#333)">' +
+            '<td style="padding:6px;vertical-align:top;color:var(--text-secondary,#98A2B3)">' +
+            fmtQcTime(c.start) + '<br>' + fmtQcTime(c.end) + '</td>' +
+            '<td style="padding:6px;vertical-align:top">' + escapeHtml(c.en) + '</td>' +
+            '<td style="padding:6px;vertical-align:top"><textarea data-qc-idx="' + c.idx + '" rows="2" style="width:100%">' + escapeHtml(c.zh) + '</textarea></td>' +
+            '<td style="padding:6px;vertical-align:top">' + (warn || '<span style="color:#22c55e">✓</span>') + '</td>' +
+            '</tr>';
+    });
+    html += '</table>';
+    document.getElementById('qcCompareBody').innerHTML = html;
+    var issueCount = _qcCues.filter(function(c) { return (c.issues || []).length; }).length;
+    document.getElementById('qcCompareStats').textContent = '共 ' + _qcCues.length + ' 条 · ' + issueCount + ' 条有质检提示';
+}
+
+function fmtQcTime(sec) {
+    var m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+    return m + ':' + (s < 10 ? '0' : '') + s;
+}
+
+function closeQcCompare() {
+    var m = document.getElementById('qcCompareModal');
+    if (m) m.style.display = 'none';
+}
+
+async function saveQcCompare() {
+    try {
+        document.querySelectorAll('#qcCompareBody textarea[data-qc-idx]').forEach(function(ta) {
+            var idx = parseInt(ta.getAttribute('data-qc-idx'), 10);
+            if (_qcCues[idx]) _qcCues[idx].zh = ta.value;
+        });
+        // 重组字幕：原文行 + 中文行
+        var segments = _qcCues.map(function(c) {
+            return { start: c.start, end: c.end, text: (c.en ? c.en + '\n' : '') + c.zh };
+        });
+        var resp = await apiFetch('/api/save-subtitle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: _qcFile, segments: segments, format: 'srt' })
+        });
+        var r = await resp.json();
+        if (r.success) {
+            showToast('已保存 ' + segments.length + ' 条', 'success');
+            closeQcCompare();
+            loadSubtitles();
+        } else {
+            showToast('保存失败: ' + (r.error || ''), 'error');
+        }
+    } catch (e) { showToast('保存失败: ' + e.message, 'error'); }
 }

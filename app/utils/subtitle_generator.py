@@ -6,6 +6,7 @@ import re
 import logging
 from datetime import datetime
 import json
+import io
 import sys
 import threading
 import time
@@ -77,6 +78,108 @@ def scrub_hallucination_segments(segments):
             continue
         kept.append(seg)
     return kept, dropped
+
+
+
+# ============================================================================
+# 云端 ASR 引擎（2026-10-27，v1.2.0）：可选的 OpenAI 兼容 /audio/transcriptions。
+# 配置 data/asr.json {enabled, base_url, api_key, model}；启用后转写优先走云端，
+# 失败自动回退本地 Whisper。说话人分离任务不适用（云端无分离能力，自动跳过云端）。
+# ============================================================================
+def _cloud_asr_config_path():
+    custom = os.environ.get('ASR_CONFIG_PATH')
+    if custom:
+        return custom
+    if os.path.isdir('/app/data'):
+        return '/app/data/asr.json'
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'data', 'asr.json')
+
+
+def _load_cloud_asr_config():
+    try:
+        with open(_cloud_asr_config_path(), 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if isinstance(data, dict) and data.get('enabled'):
+            if data.get('base_url') and data.get('model'):
+                return data
+    except Exception:
+        pass
+    return {}
+
+
+_LANG_NAME_TO_CODE = {
+    'chinese': 'zh', 'mandarin': 'zh', 'english': 'en', 'japanese': 'ja', 'japanese language': 'ja',
+    'korean': 'ko', 'french': 'fr', 'german': 'de', 'spanish': 'es', 'russian': 'ru',
+    'italian': 'it', 'portuguese': 'pt',
+}
+
+
+def _cloud_transcribe(media_path, cfg, language, progress_callback=None):
+    """调用 OpenAI 兼容 /audio/transcriptions（verbose_json），返回 (segments, info)。
+
+    音频先抽成 16k 单声道 mp3 控制上传体积；视频文件同样适用。
+    抛任何异常由调用方回退本地。
+    """
+    import subprocess as _sp
+    import tempfile as _tempfile
+    import urllib.request as _urllib
+    import uuid as _uuid
+    from types import SimpleNamespace as _NS
+
+    base = str(cfg['base_url']).rstrip('/')
+    url = base + '/audio/transcriptions'
+    if progress_callback:
+        progress_callback(12, '云端 ASR：抽取音频...')
+    fd, tmp_audio = _tempfile.mkstemp(prefix='cloudasr-', suffix='.mp3')
+    os.close(fd)
+    try:
+        r = _sp.run(['ffmpeg', '-nostdin', '-y', '-i', media_path,
+                     '-vn', '-ac', '1', '-ar', '16000', '-b:a', '48k', tmp_audio],
+                    stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, timeout=3600)
+        if r.returncode != 0 or os.path.getsize(tmp_audio) < 1024:
+            raise RuntimeError('云端 ASR 音频抽取失败')
+        if progress_callback:
+            progress_callback(15, '云端 ASR：上传转写中...')
+        boundary = '----aisub' + _uuid.uuid4().hex
+        body = io.BytesIO()
+        def part(name, value):
+            body.write(('--%s\r\nContent-Disposition: form-data; name="%s"\r\n\r\n%s\r\n'
+                        % (boundary, name, value)).encode('utf-8'))
+        part('model', str(cfg['model']))
+        part('response_format', 'verbose_json')
+        if language and language != 'auto':
+            part('language', language)
+        fname = os.path.basename(tmp_audio)
+        body.write(('--%s\r\nContent-Disposition: form-data; name="file"; filename="%s"\r\n'
+                    'Content-Type: audio/mpeg\r\n\r\n' % (boundary, fname)).encode('utf-8'))
+        with open(tmp_audio, 'rb') as f:
+            body.write(f.read())
+        body.write(('\r\n--%s--\r\n' % boundary).encode('utf-8'))
+        payload = body.getvalue()
+        req = _urllib.Request(url, data=payload, method='POST', headers={
+            'Content-Type': 'multipart/form-data; boundary=' + boundary,
+            'Authorization': 'Bearer ' + str(cfg.get('api_key') or ''),
+        })
+        with _urllib.urlopen(req, timeout=7200) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+        segs = []
+        for s in data.get('segments') or []:
+            segs.append({'start': float(s.get('start', 0)), 'end': float(s.get('end', 0)),
+                         'text': (s.get('text') or '').strip()})
+        if not segs and data.get('text'):
+            segs = [{'start': 0.0, 'end': float(data.get('duration') or 0), 'text': data['text'].strip()}]
+        if not segs:
+            raise RuntimeError('云端 ASR 返回空转写结果')
+        lang = (data.get('language') or language or 'auto').lower()
+        lang = _LANG_NAME_TO_CODE.get(lang, lang)
+        if progress_callback:
+            progress_callback(18, '云端 ASR 完成')
+        return segs, _NS(language=lang, duration=float(data.get('duration') or 0))
+    finally:
+        try:
+            os.remove(tmp_audio)
+        except OSError:
+            pass
 
 
 def _llm_config_path():
@@ -872,11 +975,28 @@ class SubtitleGenerator:
                                 f"no_speech={_no_speech} condition_on_prev={_cond_prev}")
 
                     # 执行转录（长视频自动分片 + 断点续跑，短片走单次路径）
-                    language_param = None if language == "auto" else language
-                    all_segments, info = self._transcribe_with_chunks(
-                        model, video_path, _tune, language_param, zh_prompt,
-                        progress_callback=self.progress_callback,
-                        cancel_event=cancel_event)
+                    # 云端 ASR（v1.2.0）：配置启用且任务不带说话人分离时优先云端，失败回退本地
+                    all_segments = None
+                    _cloud_cfg = {} if diarize else _load_cloud_asr_config()
+                    if _cloud_cfg:
+                        try:
+                            all_segments, info = _cloud_transcribe(
+                                video_path, _cloud_cfg, language,
+                                progress_callback=self.progress_callback)
+                            logger.info(f"云端 ASR 完成: {len(all_segments)} 段 "
+                                        f"(lang={getattr(info, 'language', language)})")
+                        except Exception as _ce:
+                            logger.warning(f"云端 ASR 失败，回退本地 Whisper: {_ce}")
+                            all_segments = None
+                    if all_segments is None:
+                        if _cloud_cfg:
+                            if self.progress_callback:
+                                self.progress_callback(18, '云端失败，回退本地 Whisper...')
+                        language_param = None if language == "auto" else language
+                        all_segments, info = self._transcribe_with_chunks(
+                            model, video_path, _tune, language_param, zh_prompt,
+                            progress_callback=self.progress_callback,
+                            cancel_event=cancel_event)
                     if all_segments is None:  # 已取消
                         return {"success": False, "error": "任务已被用户取消",
                                 "message": "canceled"}

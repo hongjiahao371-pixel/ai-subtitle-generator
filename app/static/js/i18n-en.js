@@ -10,7 +10,7 @@
     var DICT = {
         // 导航
         '系统': 'System', '历史': 'History', '队列': 'Queue', '媒体库': 'Media Library',
-        '工具': 'Tools', 'Token': 'Token', '浅色': 'Light', '深色': 'Dark',
+        '工具': 'Tools', 'Token': 'Token', '口令': 'Access Token', '更多': 'More', '任务进行中': 'Task running', '浅色': 'Light', '深色': 'Dark',
         // 主界面
         '选择视频或音频': 'Select Video or Audio', '上传文件': 'Upload File', '批量上传': 'Batch Upload',
         'NAS文件': 'NAS Files', 'NAS 文件': 'NAS Files', '点击或拖拽文件到此处处': 'Click or drop files here',
@@ -71,7 +71,25 @@
         // 系统信息
         '系统信息': 'System Info', '加载中...': 'Loading...',
         // 页脚
-        '基于 faster-whisper · 本地运行 · 数据不上传': 'Powered by faster-whisper · Runs locally · Data never leaves your NAS'
+        '基于 faster-whisper · 本地运行 · 数据不上传': 'Powered by faster-whisper · Runs locally · Data never leaves your NAS',
+        '推送': 'Push', '说话人': 'Speakers', '纪要': 'Minutes', '更多': 'More',
+        '推送字幕到媒体库': 'Push subtitles to library', '目标目录（NAS 媒体目录内）': 'Target folder (inside NAS media dir)',
+        '命名方式': 'Naming', '自动（按字幕语言加后缀）': 'Auto (suffix by language)', '同名 .srt': 'Same name .srt',
+        '中文 .zh.srt': 'Chinese .zh.srt', '推送到媒体库': 'Push', '推送': 'Push',
+        '说话人命名': 'Speaker Naming', '应用命名': 'Apply Names', '真实姓名': 'Real name',
+        '监控自动字幕': 'Auto Subtitles', '云端 ASR': 'Cloud ASR',
+        '启用监控（自动为目录内新视频生成字幕）': 'Watch folder: auto-generate subtitles for new videos',
+        '监控目录（NAS 媒体目录内的子目录）': 'Watch folder (subfolder of NAS media dir)',
+        '模型': 'Model', '翻译为': 'Translate To', '双语字幕': 'Bilingual', '说话人分离': 'Diarization',
+        '运行时段（小时，如 0-7；留空=全天）': 'Run window (hours, e.g. 0-7; empty=all day)',
+        '文件稳定等待（秒）': 'Stability wait (sec)', '立即扫描': 'Scan Now', '保存': 'Save',
+        '云端转写（优先云端，失败自动回退本地 Whisper；说话人分离任务始终用本地）':
+            'Cloud transcription (falls back to local Whisper on failure; diarization tasks always use local)',
+        '接口地址（OpenAI 兼容，自动补 /audio/transcriptions）': 'Endpoint (OpenAI compatible; /audio/transcriptions appended)',
+        '模型名': 'Model name', 'API Key（留空保留原值）': 'API Key (leave empty to keep)',
+        '双语对照质检': 'Bilingual QC', '原文 (EN)': 'Source (EN)', '译文 (ZH，可编辑)': 'Translation (ZH, editable)',
+        '质检提示': 'QC Notes', '保存修改': 'Save Changes', '关闭': 'Close',
+        '会议纪要': 'Meeting Minutes'
     };
 
     var enabled = false;

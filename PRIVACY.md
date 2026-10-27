@@ -41,11 +41,11 @@ The bundled local LLM (CPU) keeps translation on-device by default. If — and o
 
 ## 4. 设备与目录权限 / Device and Directory Permissions
 
-- 媒体目录：安装时由用户选择，**只读挂载**，应用不修改其中任何文件。
+- 媒体目录：安装时由用户选择。应用浏览并处理其中的视频；**仅当您在应用内明确点击「推送」时**，才会向该目录写入字幕文件（不改动手视频与其他任何文件）。
 - 核显设备（/dev/dri）：仅用于视频烧录与预览转码的硬件加速，不用于任何数据传输。
 - 以上权限均不涉及个人敏感信息采集。
 
-- Media folder: chosen by the user at install, mounted **read-only**; the app never modifies files in it.
+- Media folder: chosen by the user at install. The app reads and processes videos in it; **only when you explicitly click Push** does it write subtitle files there (your video files are never touched).
 - GPU device (/dev/dri): used only for hardware-accelerated encoding; never used for data transmission.
 
 ## 5. 保存与删除 / Retention and Deletion

@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#FAF7F2" media="(prefers-color-scheme: light)">
     <meta name="theme-color" content="#1A1614" media="(prefers-color-scheme: dark)">
     <title>AI 字幕生成器</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=20261026-r5.2">
+    <link rel="stylesheet" href="/static/css/style.css?v=20261027-r6.1">
     <link rel="icon" href="/favicon.ico" type="image/svg+xml">
 </head>
 <body>
@@ -546,6 +546,8 @@
                     <button class="btn btn-secondary" onclick="showWhisperModels()">Whisper 模型管理</button>
                     <button class="btn btn-secondary" onclick="loadResourceProfile()">资源模式</button>
                     <button class="btn btn-secondary" onclick="showGlossaryManager()">术语表</button>
+                    <button class="btn btn-secondary" onclick="showWatchSettings()">监控自动字幕</button>
+                    <button class="btn btn-secondary" onclick="showAsrSettings()">云端 ASR</button>
                     <button class="btn btn-secondary" onclick="showNotificationSettings()">通知</button>
                     <button class="btn btn-secondary" onclick="showLlmSettings()">AI 翻译</button>
                     <button class="btn btn-secondary" onclick="loadQueueReport()">任务报告</button>
@@ -624,6 +626,143 @@
             </div>
             <div class="modal-footer" style="display:flex;gap:10px;justify-content:flex-end">
                 <button class="btn btn-primary" onclick="submitAuthGate()">验证并进入</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 软字幕推送（v1.2.0） -->
+    <div class="modal" id="pushModal">
+        <div class="modal-content" style="max-width:460px">
+            <div class="modal-header">
+                <h3>推送字幕到媒体库</h3>
+                <button class="btn-close" onclick="closePushModal()">&times;</button>
+            </div>
+            <div class="modal-body" style="padding:20px">
+                <p id="pushFileName" style="color:var(--text-secondary,#98A2B3);font-size:0.85rem;margin:0 0 12px"></p>
+                <label style="display:block;font-size:0.85rem;margin-bottom:4px">目标目录（NAS 媒体目录内）</label>
+                <input type="text" id="pushTargetDir" style="width:100%" placeholder="/ nas 内的子目录路径">
+                <label style="display:block;font-size:0.85rem;margin:12px 0 4px">命名方式</label>
+                <select id="pushMode" style="width:100%">
+                    <option value="auto">自动（按字幕语言加后缀）</option>
+                    <option value="same">同名 .srt</option>
+                    <option value="zh">中文 .zh.srt</option>
+                </select>
+                <p style="font-size:0.78rem;color:var(--text-secondary,#98A2B3);margin:10px 0 0">Jellyfin/Emby 等刷新媒体库后即可看到字幕；若目标目录存在同名视频，字幕将与其同目录同名落位。</p>
+            </div>
+            <div class="modal-footer" style="display:flex;gap:10px;justify-content:flex-end">
+                <button class="btn btn-secondary" onclick="closePushModal()">取消</button>
+                <button class="btn btn-primary" onclick="doPushSubtitle()">推送</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 说话人命名（v1.2.0） -->
+    <div class="modal" id="speakerModal">
+        <div class="modal-content" style="max-width:460px">
+            <div class="modal-header">
+                <h3>说话人命名</h3>
+                <button class="btn-close" onclick="closeSpeakerModal()">&times;</button>
+            </div>
+            <div class="modal-body" style="padding:20px">
+                <p id="speakerFileName" style="color:var(--text-secondary,#98A2B3);font-size:0.85rem;margin:0 0 12px"></p>
+                <div id="speakerRows"></div>
+            </div>
+            <div class="modal-footer" style="display:flex;gap:10px;justify-content:flex-end">
+                <button class="btn btn-secondary" onclick="closeSpeakerModal()">取消</button>
+                <button class="btn btn-primary" onclick="doSpeakerNaming()">应用命名</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 监控自动字幕设置（v1.2.0） -->
+    <div class="modal" id="watchModal">
+        <div class="modal-content" style="max-width:520px">
+            <div class="modal-header">
+                <h3>监控自动字幕</h3>
+                <button class="btn-close" onclick="closeWatchModal()">&times;</button>
+            </div>
+            <div class="modal-body" style="padding:20px">
+                <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+                    <input type="checkbox" id="watchEnabled"> 启用监控（自动为目录内新视频生成字幕）
+                </label>
+                <label style="display:block;font-size:0.85rem;margin-bottom:4px">监控目录（NAS 媒体目录内的子目录）</label>
+                <input type="text" id="watchDir" style="width:100%" placeholder="例如：incoming">
+                <div style="display:flex;gap:10px;margin-top:10px">
+                    <div style="flex:1"><label style="display:block;font-size:0.85rem;margin-bottom:4px">模型</label>
+                        <select id="watchModel" style="width:100%">
+                            <option value="small">Small（较准）</option>
+                            <option value="base">Base（平衡）</option>
+                            <option value="medium">Medium（准确）</option>
+                            <option value="large-v3-turbo">Large V3 Turbo</option>
+                            <option value="large-v3">Large V3（高精度）</option>
+                        </select></div>
+                    <div style="flex:1"><label style="display:block;font-size:0.85rem;margin-bottom:4px">翻译为</label>
+                        <select id="watchTranslate" style="width:100%">
+                            <option value="">不翻译</option>
+                            <option value="en">英语</option>
+                            <option value="zh">中文</option>
+                        </select></div>
+                </div>
+                <div style="display:flex;gap:10px;margin-top:10px;align-items:center">
+                    <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="watchBilingual"> 双语字幕</label>
+                    <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="watchDiarize"> 说话人分离</label>
+                </div>
+                <div style="display:flex;gap:10px;margin-top:10px">
+                    <div style="flex:1"><label style="display:block;font-size:0.85rem;margin-bottom:4px">运行时段（小时，如 0-7；留空=全天）</label>
+                        <input type="text" id="watchWindow" style="width:100%" placeholder="0-7"></div>
+                    <div style="flex:1"><label style="display:block;font-size:0.85rem;margin-bottom:4px">文件稳定等待（秒）</label>
+                        <input type="number" id="watchStableAge" value="300" min="30" max="7200" style="width:100%"></div>
+                </div>
+                <div id="watchState" style="font-size:0.8rem;color:var(--text-secondary,#98A2B3);margin-top:12px"></div>
+            </div>
+            <div class="modal-footer" style="display:flex;gap:10px;justify-content:flex-end">
+                <button class="btn btn-secondary" onclick="watchScanNow()">立即扫描</button>
+                <button class="btn btn-secondary" onclick="closeWatchModal()">取消</button>
+                <button class="btn btn-primary" onclick="saveWatchSettings()">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 云端 ASR 设置（v1.2.0） -->
+    <div class="modal" id="asrModal">
+        <div class="modal-content" style="max-width:480px">
+            <div class="modal-header">
+                <h3>云端 ASR 引擎</h3>
+                <button class="btn-close" onclick="closeAsrModal()">&times;</button>
+            </div>
+            <div class="modal-body" style="padding:20px">
+                <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+                    <input type="checkbox" id="asrEnabled"> 启用云端转写（优先云端，失败自动回退本地 Whisper；说话人分离任务始终用本地）
+                </label>
+                <label style="display:block;font-size:0.85rem;margin-bottom:4px">接口地址（OpenAI 兼容，自动补 /audio/transcriptions）</label>
+                <input type="text" id="asrBaseUrl" style="width:100%" placeholder="https://api.openai.com/v1">
+                <label style="display:block;font-size:0.85rem;margin:12px 0 4px">模型名</label>
+                <input type="text" id="asrModel" style="width:100%" placeholder="whisper-1">
+                <label style="display:block;font-size:0.85rem;margin:12px 0 4px">API Key（留空保留原值）</label>
+                <input type="password" id="asrApiKey" style="width:100%" placeholder="sk-...">
+                <p style="font-size:0.78rem;color:var(--text-secondary,#98A2B3);margin:10px 0 0">音频会压缩为 16k 单声道 mp3 上传。请确认你信任该服务提供方。</p>
+            </div>
+            <div class="modal-footer" style="display:flex;gap:10px;justify-content:flex-end">
+                <button class="btn btn-secondary" onclick="closeAsrModal()">取消</button>
+                <button class="btn btn-primary" onclick="saveAsrSettings()">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 双语对照质检（v1.2.0） -->
+    <div class="modal" id="qcCompareModal">
+        <div class="modal-content" style="max-width:1000px;height:86vh;display:flex;flex-direction:column">
+            <div class="modal-header">
+                <h3>双语对照质检 <span id="qcCompareFile" style="font-size:0.8rem;color:var(--text-secondary,#98A2B3)"></span></h3>
+                <button class="btn-close" onclick="closeQcCompare()">&times;</button>
+            </div>
+            <div class="modal-body" style="flex:1;overflow:auto;padding:12px 20px" id="qcCompareBody"></div>
+            <div class="modal-footer" style="display:flex;gap:10px;justify-content:space-between;align-items:center">
+                <span id="qcCompareStats" style="font-size:0.82rem;color:var(--text-secondary,#98A2B3)"></span>
+                <div style="display:flex;gap:10px">
+                    <button class="btn btn-secondary" onclick="closeQcCompare()">关闭</button>
+                    <button class="btn btn-primary" onclick="saveQcCompare()">保存修改</button>
+                </div>
             </div>
         </div>
     </div>
@@ -741,7 +880,7 @@
 
     <div class="toast" id="toast"></div>
     <script src="/static/js/vendor/hls.min.js?v=20261011-r4.1"></script>
-    <script src="/static/js/i18n-en.js?v=20261026-r5.1"></script>
-    <script src="/static/js/app.js?v=20261026-r5.2"></script>
+    <script src="/static/js/i18n-en.js?v=20261027-r6.1"></script>
+    <script src="/static/js/app.js?v=20261027-r6.1"></script>
 </body>
 </html>
