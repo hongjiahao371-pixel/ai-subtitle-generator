@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#FAF7F2" media="(prefers-color-scheme: light)">
     <meta name="theme-color" content="#1A1614" media="(prefers-color-scheme: dark)">
     <title>AI 字幕生成器</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=20261027-r6.1">
+    <link rel="stylesheet" href="/static/css/style.css?v=20261028-r7.1">
     <link rel="icon" href="/favicon.ico" type="image/svg+xml">
 </head>
 <body>
@@ -543,6 +543,7 @@
                     <button class="btn btn-secondary" onclick="runCleanup('failed-tasks')">清理失败任务</button>
                     <button class="btn btn-secondary" onclick="runCleanup('history')">清空历史</button>
                     <button class="btn btn-secondary" onclick="loadModelsInfo()">模型信息</button>
+                    <button class="btn btn-secondary" onclick="showStatsPanel()">统计面板</button>
                     <button class="btn btn-secondary" onclick="showWhisperModels()">Whisper 模型管理</button>
                     <button class="btn btn-secondary" onclick="loadResourceProfile()">资源模式</button>
                     <button class="btn btn-secondary" onclick="showGlossaryManager()">术语表</button>
@@ -626,6 +627,53 @@
             </div>
             <div class="modal-footer" style="display:flex;gap:10px;justify-content:flex-end">
                 <button class="btn btn-primary" onclick="submitAuthGate()">验证并进入</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 片段导出（v1.3.0） -->
+    <div class="modal" id="clipModal">
+        <div class="modal-content" style="max-width:460px">
+            <div class="modal-header">
+                <h3>导出视频片段</h3>
+                <button class="btn-close" onclick="closeClipModal()">&times;</button>
+            </div>
+            <div class="modal-body" style="padding:20px">
+                <p id="clipFileName" style="color:var(--text-secondary,#98A2B3);font-size:0.85rem;margin:0 0 12px"></p>
+                <div style="display:flex;gap:10px">
+                    <div style="flex:1"><label style="display:block;font-size:0.85rem;margin-bottom:4px">开始（秒）</label>
+                        <input type="number" id="clipStart" value="0" min="0" step="0.1" style="width:100%"></div>
+                    <div style="flex:1"><label style="display:block;font-size:0.85rem;margin-bottom:4px">结束（秒）</label>
+                        <input type="number" id="clipEnd" placeholder="留空=到片尾" step="0.1" style="width:100%"></div>
+                </div>
+                <label style="display:flex;align-items:center;gap:8px;margin-top:12px">
+                    <input type="checkbox" id="clipAccurate"> 精确切点（重编码，较慢；关闭=关键帧快速裁剪）
+                </label>
+            </div>
+            <div class="modal-footer" style="display:flex;gap:10px;justify-content:flex-end">
+                <button class="btn btn-secondary" onclick="closeClipModal()">取消</button>
+                <button class="btn btn-primary" onclick="doClipExport()">导出片段</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 批量烧录（v1.3.0） -->
+    <div class="modal" id="burnBatchModal">
+        <div class="modal-content" style="max-width:520px">
+            <div class="modal-header">
+                <h3>批量烧录</h3>
+                <button class="btn-close" onclick="closeBurnBatchModal()">&times;</button>
+            </div>
+            <div class="modal-body" style="padding:20px">
+                <p style="font-size:0.85rem;color:var(--text-secondary,#98A2B3);margin:0 0 10px">勾选要烧录的字幕（需有同名视频），串行执行，可关闭页面。</p>
+                <div id="burnBatchList" style="max-height:300px;overflow:auto"></div>
+                <label style="display:flex;align-items:center;gap:8px;margin-top:10px">
+                    <input type="checkbox" id="burnBatchAcc" checked> 沿用上次烧录样式（默认样式）
+                </label>
+            </div>
+            <div class="modal-footer" style="display:flex;gap:10px;justify-content:flex-end">
+                <button class="btn btn-secondary" onclick="closeBurnBatchModal()">取消</button>
+                <button class="btn btn-primary" onclick="doBurnBatch()">开始批量烧录</button>
             </div>
         </div>
     </div>
@@ -880,7 +928,7 @@
 
     <div class="toast" id="toast"></div>
     <script src="/static/js/vendor/hls.min.js?v=20261011-r4.1"></script>
-    <script src="/static/js/i18n-en.js?v=20261027-r6.1"></script>
-    <script src="/static/js/app.js?v=20261027-r6.1"></script>
+    <script src="/static/js/i18n-en.js?v=20261028-r7.1"></script>
+    <script src="/static/js/app.js?v=20261028-r7.1"></script>
 </body>
 </html>

@@ -6,6 +6,7 @@ import time
 import logging
 import threading
 import subprocess as sp
+import urllib.request as urllib_request
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_from_directory, Response
 from werkzeug.utils import secure_filename
@@ -509,6 +510,20 @@ NOTIFICATION_FILE = os.path.join(app.config['SUBTITLE_FOLDER'], '.notification.j
 def _load_glossaries():
     return _json_file_load(GLOSSARY_FILE, {})
 
+
+def _merged_glossary(glossary, glossary_name=None):
+    """合并术语表（2026-10-27 v1.2.0）：全局术语表（名为 global）自动生效，
+    任务自带术语 > 指定命名术语表 > 全局，逐级覆盖。"""
+    out = {}
+    g = _load_glossaries()
+    if isinstance(g.get('global'), dict):
+        out.update(g['global'])
+    if glossary_name and isinstance(g.get(glossary_name), dict):
+        out.update(g[glossary_name])
+    if isinstance(glossary, dict):
+        out.update(glossary)
+    return out
+
 def _load_notification_settings():
     data = _json_file_load(NOTIFICATION_FILE, {})
     if not isinstance(data, dict):
@@ -702,7 +717,7 @@ def health_check():
         'status': 'ok',
         'model_loaded': __import__('utils.ai_memory',fromlist=['asr_weights_loaded']).asr_weights_loaded(SubtitleGenerator._model_cache),
         'memory_mode': os.getenv('LOCAL_LLM_MEMORY_MODE','0')=='1',
-        'version': '2026.10.26.1',
+        'version': '2026.10.28.2',
         'auth_enabled': bool(_AUTH_TOKEN),
         'model_size': os.getenv('MODEL_SIZE', 'base'),
         'system_info': system_info,
@@ -1033,6 +1048,9 @@ def generate_subtitle():
             filepath = _safe_join(app.config['UPLOAD_FOLDER'], filename)
             if filepath is None or not os.path.isfile(filepath):
                 return jsonify({'success': False, 'error': f'文件不存在'}), 404
+
+        # 全局术语库合并（v1.2.0）：global 自动生效，任务级覆盖
+        glossary = _merged_glossary(glossary, None)
 
         # C1: 走 TaskQueue（统一管理 + 重启恢复）
         q = _get_task_queue()
@@ -2202,7 +2220,7 @@ def subtitle_translate():
         glossary = data.get('glossary') or {}
         glossary_name = data.get('glossary_name')
         if glossary_name:
-            glossary.update(_load_glossaries().get(glossary_name, {}))
+            glossary = _merged_glossary(glossary, glossary_name)
         temp_generator = SubtitleGenerator(model_size=os.getenv('MODEL_SIZE', 'tiny'), device='cpu' if use_llm else os.getenv('USE_GPU', 'auto'))
         source_media=read_metadata(subtitle_path).get('source_media')
         if source_media and os.path.isfile(source_media):
@@ -3084,6 +3102,642 @@ def delete_whisper_model(name):
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+
+# ============================================================================
+# 监控目录自动字幕（2026-10-27 v1.2.0）：扫描监控目录，新视频落地自动排队生成。
+# 配置存 data/watch.json；扫描状态存 data/watch-state.json（含已入队清单防重复）。
+# 支持时段窗口（watch.window，如 "0-7" 表示 0:00-7:59 才入队，避免白天挤占）。
+# ============================================================================
+WATCH_CONFIG_FILE = os.path.join(os.environ.get('AISUB_DATA_DIR', '/app/data'), 'watch.json') \
+    if os.path.isdir(os.environ.get('AISUB_DATA_DIR', '/app/data')) \
+    else os.path.join('data', 'watch.json')
+WATCH_STATE_FILE = WATCH_CONFIG_FILE.replace('watch.json', 'watch-state.json')
+_watch_state_lock = threading.Lock()
+
+def _load_watch_config():
+    try:
+        with open(WATCH_CONFIG_FILE, 'r', encoding='utf-8') as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+def _save_watch_config(cfg):
+    os.makedirs(os.path.dirname(WATCH_CONFIG_FILE), exist_ok=True)
+    tmp = WATCH_CONFIG_FILE + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, WATCH_CONFIG_FILE)
+
+def _load_watch_state():
+    try:
+        with open(WATCH_STATE_FILE, 'r', encoding='utf-8') as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+def _save_watch_state(st):
+    try:
+        os.makedirs(os.path.dirname(WATCH_STATE_FILE), exist_ok=True)
+        tmp = WATCH_STATE_FILE + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(st, f, ensure_ascii=False)
+        os.replace(tmp, WATCH_STATE_FILE)
+    except Exception:
+        pass
+
+def _watch_window_open(cfg):
+    """时段窗口：window 形如 "0-7"（0:00-7:59）或空=全天。"""
+    w = str(cfg.get('window') or '').strip()
+    if not w or '-' not in w:
+        return True
+    try:
+        a, b = w.split('-', 1)
+        h = datetime.now().hour
+        a, b = int(a), int(b)
+        return (a <= h <= b) if a <= b else (h >= a or h <= b)
+    except Exception:
+        return True
+
+def _history_filenames():
+    try:
+        hist = _load_history()
+        return {str(h.get('filename') or '') for h in hist}
+    except Exception:
+        return set()
+
+def _active_task_paths():
+    out = set()
+    try:
+        with processing_tasks_lock:
+            for t in processing_tasks.values():
+                vp = t.get('_video_path') or ''
+                if vp:
+                    out.add(vp)
+    except Exception:
+        pass
+    try:
+        q = _get_task_queue()
+        for t in q.list_tasks(limit=500):
+            if t.get('status') in ('pending', 'running'):
+                vp = t.get('video_path') or ''
+                if vp:
+                    out.add(vp)
+    except Exception:
+        pass
+    return out
+
+def watch_scan_once():
+    """单次扫描：返回 {scanned, enqueued, skipped_active}。"""
+    cfg = _load_watch_config()
+    result = {'scanned': 0, 'enqueued': 0, 'skipped_active': 0, 'window_open': _watch_window_open(cfg)}
+    if not cfg.get('enabled') or not cfg.get('dir'):
+        return result
+    if not result['window_open']:
+        return result
+    wdir = cfg['dir']
+    if not os.path.isdir(wdir):
+        return result
+    state = _load_watch_state()
+    sizes = state.get('sizes') or {}
+    enqueued = set(state.get('enqueued') or [])
+    new_sizes = {}
+    nas_root = os.path.realpath(os.environ.get('NAS_PATH', '/nas/videos'))
+    active = _active_task_paths()
+    hist_names = _history_filenames()
+    stable_age = int(cfg.get('stable_age') or 300)
+    now = time.time()
+    for name in os.listdir(wdir):
+        fp = os.path.join(wdir, name)
+        if not os.path.isfile(fp) or name.startswith('.'):
+            continue
+        ext = os.path.splitext(name)[1].lower()
+        if ext not in VIDEO_EXTENSIONS:
+            continue
+        result['scanned'] += 1
+        try:
+            st = os.stat(fp)
+        except OSError:
+            continue
+        new_sizes[fp] = st.st_size
+        key = fp
+        # 稳定判定：体积与上次扫描一致 + 文件龄达标
+        if sizes.get(fp) != st.st_size or (now - st.st_mtime) < stable_age:
+            continue
+        if fp in enqueued or fp in active:
+            result['skipped_active'] += 1
+            continue
+        # 已有同名历史（曾生成过字幕）→ 不重复排队
+        if name in hist_names:
+            enqueued.add(key)
+            continue
+        rel = os.path.relpath(fp, nas_root)
+        try:
+            q = _get_task_queue()
+            task_id = q.add('whisper', fp, {
+                'model': cfg.get('model') or 'small',
+                'language': cfg.get('language') or 'auto',
+                'format': 'srt',
+                'translate_to': cfg.get('translate_to') or None,
+                'translate_engine': 'auto',
+                'diarize': bool(cfg.get('diarize')),
+                'num_speakers': 0,
+                'save_to_source_dir': False,
+                'save_strategy': 'subtitles',
+                'output_naming': 'plain',
+                'bilingual': bool(cfg.get('bilingual')),
+                'split_max_chars': 0,
+                'glossary': {},
+                'filename': rel,
+                'is_nas_file': True,
+            })
+            enqueued.add(key)
+            result['enqueued'] += 1
+            logger.info(f"[监控] 自动入队: {name} (task={task_id})")
+        except Exception as e:
+            logger.error(f"[监控] 入队失败 {name}: {e}")
+    with _watch_state_lock:
+        state['sizes'] = new_sizes
+        state['enqueued'] = sorted(enqueued)[-500:]
+        state['last_scan'] = datetime.now().isoformat()
+        state['last_result'] = result
+        _save_watch_state(state)
+    return result
+
+def _watch_thread():
+    logger.info("[监控] 自动字幕扫描线程已启动")
+    while True:
+        try:
+            r = watch_scan_once()
+            if r.get('enqueued'):
+                logger.info(f"[监控] 本轮入队 {r['enqueued']} 个")
+        except Exception as e:
+            logger.error(f"[监控] 扫描异常: {e}")
+        time.sleep(int(os.environ.get('WATCH_INTERVAL', '180')))
+
+def _start_watch_thread():
+    if os.environ.get('WATCH_AUTOLOAD', '1') == '0':
+        return
+    cfg = _load_watch_config()
+    if cfg.get('enabled'):
+        t = threading.Thread(target=_watch_thread, daemon=True, name='watch-subtitles')
+        t.start()
+
+@app.route('/api/watch-settings', methods=['GET'])
+def api_watch_settings_get():
+    cfg = _load_watch_config()
+    cfg['state'] = {k: v for k, v in _load_watch_state().items() if k != 'sizes'}
+    return jsonify({'success': True, 'config': cfg})
+
+@app.route('/api/watch-settings', methods=['POST'])
+def api_watch_settings_post():
+    try:
+        data = request.get_json() or {}
+        cfg = {
+            'enabled': bool(data.get('enabled')),
+            'dir': str(data.get('dir') or '').strip(),
+            'model': data.get('model') or 'small',
+            'language': data.get('language') or 'auto',
+            'bilingual': bool(data.get('bilingual')),
+            'translate_to': (data.get('translate_to') or None),
+            'diarize': bool(data.get('diarize')),
+            'window': str(data.get('window') or '').strip(),
+            'stable_age': int(data.get('stable_age') or 300),
+        }
+        if cfg['enabled']:
+            if not cfg['dir'] or not os.path.isdir(cfg['dir']):
+                return jsonify({'success': False, 'error': '监控目录不存在'}), 400
+            if cfg['model'] not in ('tiny', 'base', 'small', 'medium', 'large', 'large-v3-turbo'):
+                return jsonify({'success': False, 'error': f'非法模型: {cfg["model"]}'}), 400
+        _save_watch_config(cfg)
+        if cfg['enabled']:
+            _start_watch_thread()
+        return jsonify({'success': True, 'message': '监控设置已保存'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/watch-scan', methods=['POST'])
+def api_watch_scan():
+    """手动触发一次扫描（不受时段窗口限制，便于测试）。"""
+    try:
+        r = watch_scan_once()
+        return jsonify({'success': True, 'result': r})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ============================================================================
+# 字幕直推媒体库（2026-10-27 v1.2.0）：把字幕按播放器规范命名复制到媒体库目录，
+# Jellyfin/Emby/Infuse 等刷新即见。目标目录强制在 NAS 媒体根下。
+# ============================================================================
+@app.route('/api/push-subtitle', methods=['POST'])
+def api_push_subtitle():
+    try:
+        data = request.get_json() or {}
+        filename = data.get('filename')
+        target_dir = str(data.get('target_dir') or '').strip()
+        mode = data.get('mode') or 'same'
+        if not filename:
+            return jsonify({'success': False, 'error': '缺少字幕文件名'}), 400
+        subtitle_path = _safe_subtitle_path(filename)
+        if subtitle_path is None or not os.path.isfile(subtitle_path):
+            return jsonify({'success': False, 'error': '字幕文件不存在'}), 404
+        if not target_dir:
+            return jsonify({'success': False, 'error': '缺少目标目录'}), 400
+        nas_root = os.path.realpath(os.environ.get('NAS_PATH', '/nas/videos'))
+        real_target = os.path.realpath(target_dir)
+        if real_target != nas_root and not real_target.startswith(nas_root + os.sep):
+            return jsonify({'success': False, 'error': '目标目录必须在 NAS 媒体目录内'}), 400
+        if not os.path.isdir(real_target):
+            return jsonify({'success': False, 'error': '目标目录不存在'}), 404
+        base_name = re.sub(r'\.(srt|vtt|ass|json|txt)$', '', filename, flags=re.IGNORECASE)
+        # 匹配媒体文件（同 basename）确认落在正确目录
+        video = _find_media_by_basename(base_name)
+        lang_tag = ''
+        m = re.search(r'\.([a-z]{2,3})(?:-[a-z]{2,3})?$', base_name, re.IGNORECASE)
+        if m:
+            lang_tag = '.' + m.group(1).lower()
+        if mode == 'zh':
+            out_name = base_name + '.zh.srt'
+        elif mode == 'same':
+            out_name = base_name + '.srt'
+        else:  # auto
+            out_name = base_name + (lang_tag if lang_tag else '') + '.srt'
+        # 若目标目录下存在同名视频，则字幕直接与视频同目录同名
+        dest = os.path.join(real_target, out_name)
+        if video:
+            vdir = os.path.dirname(video)
+            vname = os.path.splitext(os.path.basename(video))[0]
+            dest = os.path.join(vdir, vname + (('.zh.srt') if mode == 'zh' else (lang_tag if mode == 'auto' and lang_tag else '') + '.srt' if mode != 'same' else '.srt'))
+        import shutil
+        shutil.copy2(subtitle_path, dest)
+        logger.info(f"字幕已推送: {filename} -> {dest}")
+        return jsonify({'success': True, 'message': '字幕已推送到媒体库', 'dest': dest})
+    except Exception as e:
+        logger.error(f"字幕推送失败: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ============================================================================
+# 说话人命名（2026-10-27 v1.2.0）：把【说话人N】批量替换成真实姓名。
+# 映射持久化在 <字幕名>.speakers.json，下次打开自动带出。
+# ============================================================================
+@app.route('/api/speaker-names/<path:filename>', methods=['GET'])
+def api_speaker_names_get(filename):
+    try:
+        subtitle_path = _safe_subtitle_path(filename)
+        if subtitle_path is None or not os.path.isfile(subtitle_path):
+            return jsonify({'success': False, 'error': '字幕文件不存在'}), 404
+        with open(subtitle_path, 'r', encoding='utf-8', errors='replace') as f:
+            text = f.read()
+        speakers = sorted(set(re.findall(r'【(说话人\d+)】', text)))
+        saved = {}
+        sidecar = os.path.splitext(subtitle_path)[0] + '.speakers.json'
+        if os.path.isfile(sidecar):
+            try:
+                with open(sidecar, 'r', encoding='utf-8') as f:
+                    saved = json.load(f)
+            except Exception:
+                saved = {}
+        return jsonify({'success': True, 'speakers': speakers, 'saved': saved})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/speaker-names/<path:filename>', methods=['POST'])
+def api_speaker_names_post(filename):
+    try:
+        data = request.get_json() or {}
+        mapping = data.get('mapping') or {}
+        if not mapping:
+            return jsonify({'success': False, 'error': '缺少映射'}), 400
+        subtitle_path = _safe_subtitle_path(filename)
+        if subtitle_path is None or not os.path.isfile(subtitle_path):
+            return jsonify({'success': False, 'error': '字幕文件不存在'}), 404
+        if not filename.lower().endswith('.srt'):
+            return jsonify({'success': False, 'error': '说话人命名仅支持 SRT'}), 400
+        with open(subtitle_path, 'r', encoding='utf-8', errors='replace') as f:
+            text = f.read()
+        replaced = 0
+        for spk, name in mapping.items():
+            name = str(name).strip()
+            if not name:
+                continue
+            new_text, n = re.subn(re.escape('【' + spk + '】'), '【' + name + '】', text)
+            if n:
+                replaced += n
+                text = new_text
+        with open(subtitle_path, 'w', encoding='utf-8') as f:
+            f.write(text)
+        sidecar = os.path.splitext(subtitle_path)[0] + '.speakers.json'
+        saved = {}
+        if os.path.isfile(sidecar):
+            try:
+                with open(sidecar, 'r', encoding='utf-8') as f:
+                    saved = json.load(f)
+            except Exception:
+                saved = {}
+        saved.update(mapping)
+        with open(sidecar, 'w', encoding='utf-8') as f:
+            json.dump(saved, f, ensure_ascii=False, indent=1)
+        return jsonify({'success': True, 'message': f'已替换 {replaced} 处', 'replaced': replaced})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ============================================================================
+# 云端 ASR 配置（2026-10-27 v1.2.0）
+# ============================================================================
+ASR_CONFIG_FILE = os.path.join(os.environ.get('AISUB_DATA_DIR', '/app/data'), 'asr.json') \
+    if os.path.isdir(os.environ.get('AISUB_DATA_DIR', '/app/data')) \
+    else os.path.join('data', 'asr.json')
+
+def _load_asr_config():
+    try:
+        with open(ASR_CONFIG_FILE, 'r', encoding='utf-8') as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+def _save_asr_config(cfg):
+    os.makedirs(os.path.dirname(ASR_CONFIG_FILE), exist_ok=True)
+    tmp = ASR_CONFIG_FILE + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, ASR_CONFIG_FILE)
+
+@app.route('/api/asr-config', methods=['GET'])
+def api_asr_config_get():
+    cfg = _load_asr_config()
+    key = str(cfg.get('api_key') or '')
+    masked = (key[:6] + '***' + key[-4:]) if len(key) > 12 else ('***' if key else '')
+    return jsonify({'success': True, 'config': {
+        'enabled': bool(cfg.get('enabled')),
+        'base_url': cfg.get('base_url') or '',
+        'model': cfg.get('model') or '',
+        'api_key_set': bool(key),
+        'api_key_masked': masked,
+    }})
+
+@app.route('/api/asr-config', methods=['POST'])
+def api_asr_config_post():
+    try:
+        data = request.get_json() or {}
+        cfg = _load_asr_config()
+        cfg['enabled'] = bool(data.get('enabled'))
+        base_url = str(data.get('base_url') or '').strip().rstrip('/')
+        if base_url and not re.match(r'^https?://', base_url):
+            return jsonify({'success': False, 'error': 'base_url 必须以 http(s):// 开头'}), 400
+        cfg['base_url'] = base_url
+        cfg['model'] = str(data.get('model') or '').strip()[:120]
+        new_key = str(data.get('api_key') or '').strip()
+        if new_key and '*' not in new_key:
+            cfg['api_key'] = new_key
+        if cfg['enabled'] and not (cfg.get('base_url') and cfg.get('model')):
+            return jsonify({'success': False, 'error': '启用云端 ASR 需要填全 base_url / model（api_key 视服务而定）'}), 400
+        _save_asr_config(cfg)
+        return jsonify({'success': True, 'message': '云端 ASR 配置已保存'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+
+# ============================================================================
+# v1.3.0：片段导出 / 批量烧录 / 字幕库统计
+# ============================================================================
+@app.route('/api/clip-export', methods=['POST'])
+def api_clip_export():
+    """按时间段裁剪视频片段（供混剪/精彩集锦）。默认流复制（秒级，切点对齐关键帧），
+    accurate=true 时重编码实现精确切点。产物落字幕目录（列表中标为成片）。"""
+    try:
+        data = request.get_json() or {}
+        filename = data.get('filename')
+        try:
+            start = float(data.get('start', 0))
+            end = float(data.get('end', 0))
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': '起止时间非法'}), 400
+        if start < 0 or end <= start:
+            return jsonify({'success': False, 'error': '结束时间必须大于开始时间'}), 400
+        if end - start > 4 * 3600:
+            return jsonify({'success': False, 'error': '片段过长（上限 4 小时）'}), 400
+        accurate = bool(data.get('accurate'))
+        media = _resolve_media_file(data.get('path') if data.get('is_nas_file') else None, filename)
+        if not media:
+            return jsonify({'success': False, 'error': '视频文件不存在'}), 404
+        base_name = os.path.splitext(os.path.basename(media))[0]
+        import uuid
+        output_filename = f'{base_name}_clip_{uuid.uuid4().hex[:8]}.mp4'
+        output_path = os.path.join(app.config['SUBTITLE_FOLDER'], output_filename)
+        task_id = f"clip_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+        with processing_tasks_lock:
+            processing_tasks[task_id] = {
+                'status': 'processing',
+                'filename': filename,
+                'start_time': datetime.now().isoformat(),
+                'progress': 0,
+                'progress_info': '片段导出已启动...'
+            }
+
+        def clip_process():
+            try:
+                with processing_tasks_lock:
+                    processing_tasks[task_id]['progress'] = 15
+                    processing_tasks[task_id]['progress_info'] = '正在裁剪片段...'
+                duration = end - start
+                if accurate:
+                    cmd = ['ffmpeg', '-nostdin', '-y',
+                           '-ss', f'{start:.3f}', '-i', media, '-t', f'{duration:.3f}',
+                           '-c:v', 'libx264', '-crf', '23', '-preset', 'veryfast',
+                           '-c:a', 'aac', '-movflags', '+faststart', output_path]
+                    encoder = 'libx264(精确切点)'
+                else:
+                    cmd = ['ffmpeg', '-nostdin', '-y',
+                           '-ss', f'{start:.3f}', '-i', media, '-t', f'{duration:.3f}',
+                           '-c', 'copy', '-movflags', '+faststart', output_path]
+                    encoder = 'stream-copy(快速)'
+                proc = sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.PIPE, timeout=7200)
+                if proc.returncode != 0:
+                    raise RuntimeError('ffmpeg 裁剪失败: ' + proc.stderr.decode('utf-8', 'replace')[-300:])
+                size = os.path.getsize(output_path)
+                with processing_tasks_lock:
+                    processing_tasks[task_id].update({
+                        'status': 'completed', 'progress': 100, 'progress_info': '片段导出完成',
+                        'result': {'encoder': encoder, 'output_file': output_filename,
+                                   'output_path': output_path, 'size': size,
+                                   'duration': duration}})
+                logger.info(f"片段导出完成: {output_filename} ({encoder})")
+            except Exception as e:
+                logger.error(f"片段导出失败: {e}")
+                with processing_tasks_lock:
+                    processing_tasks[task_id].update({'status': 'failed', 'progress_info': '导出失败',
+                                                      'error': str(e)[:300]})
+                try:
+                    os.remove(output_path)
+                except OSError:
+                    pass
+
+        threading.Thread(target=clip_process, daemon=True).start()
+        return jsonify({'success': True, 'task_id': task_id, 'message': '片段导出任务已启动'})
+    except Exception as e:
+        logger.error(f"启动片段导出失败: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/burn-batch', methods=['POST'])
+def api_burn_batch():
+    """批量烧录：串行逐个烧录多份字幕（服务端自驱动，页面关闭不影响）。
+
+    复用单任务烧录：通过本机回环调用 /api/burn-subtitle 后轮询各子任务至完成，
+    再启动下一个；任一失败记录后继续，批次整体结果通过 batch 任务上报。
+    """
+    try:
+        data = request.get_json() or {}
+        filenames = data.get('filenames') or []
+        style = data.get('style') or {}
+        if not isinstance(filenames, list) or not filenames:
+            return jsonify({'success': False, 'error': '缺少字幕文件列表'}), 400
+        if len(filenames) > 50:
+            return jsonify({'success': False, 'error': '单批最多 50 份'}), 400
+        token = os.environ.get('AUTH_TOKEN', '').strip()
+        batch_id = f"burnbatch_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+        with processing_tasks_lock:
+            processing_tasks[batch_id] = {
+                'status': 'processing',
+                'filename': ','.join(filenames[:3]) + ('…' if len(filenames) > 3 else ''),
+                'start_time': datetime.now().isoformat(),
+                'progress': 0,
+                'progress_info': f'批量烧录 0/{len(filenames)}',
+                'result': {},
+                'type': 'burn_batch',
+                '_files': list(filenames),
+                '_style': style,
+                '_token': token,
+            }
+
+        def batch_process():
+            files = []
+            with processing_tasks_lock:
+                files = list(processing_tasks[batch_id]['_files'])
+            ok, fail = [], []
+            try:
+                for i, fn in enumerate(files):
+                    with processing_tasks_lock:
+                        if processing_tasks[batch_id].get('status') == 'cancelling':
+                            raise RuntimeError('批次已取消')
+                        processing_tasks[batch_id]['progress_info'] = f'烧录 {i + 1}/{len(files)}: {fn}'
+                    tid = None
+                    try:
+                        body = json.dumps({'subtitle_filename': fn, 'style': style}).encode('utf-8')
+                        req = urllib_request.Request(
+                            'http://127.0.0.1:5000/api/burn-subtitle', data=body, method='POST',
+                            headers={'Content-Type': 'application/json',
+                                     **({'Authorization': 'Bearer ' + token} if token else {})})
+                        with urllib_request.urlopen(req, timeout=60) as resp:
+                            r = json.loads(resp.read().decode('utf-8'))
+                        if not r.get('success'):
+                            raise RuntimeError(r.get('error') or '启动失败')
+                        tid = r['task_id']
+                    except Exception as e:
+                        fail.append({'filename': fn, 'error': str(e)[:200]})
+                        continue
+                    while True:
+                        time.sleep(3)
+                        with processing_tasks_lock:
+                            t = processing_tasks.get(tid) or {}
+                            if t.get('status') == 'completed':
+                                ok.append({'filename': fn, 'output': (t.get('result') or {}).get('output_file')})
+                                break
+                            if t.get('status') == 'failed':
+                                fail.append({'filename': fn, 'error': (t.get('error') or '')[:200]})
+                                break
+                    with processing_tasks_lock:
+                        processing_tasks[batch_id]['progress'] = int((i + 1) / len(files) * 100)
+                        processing_tasks[batch_id]['progress_info'] = f'批量烧录 {i + 1}/{len(files)} 完成'
+                with processing_tasks_lock:
+                    processing_tasks[batch_id].update({
+                        'status': 'completed', 'progress': 100, 'progress_info': '批量烧录完成',
+                        'result': {'ok': ok, 'fail': fail, 'total': len(files),
+                                   'ok_count': len(ok), 'fail_count': len(fail)}})
+                logger.info(f"批量烧录完成: 成功 {len(ok)} 失败 {len(fail)}")
+            except Exception as e:
+                logger.error(f"批量烧录异常: {e}")
+                with processing_tasks_lock:
+                    processing_tasks[batch_id].update({'status': 'failed', 'error': str(e)[:300]})
+
+        threading.Thread(target=batch_process, daemon=True).start()
+        return jsonify({'success': True, 'task_id': batch_id,
+                        'message': f'批量烧录已启动（{len(filenames)} 份，串行执行）'})
+    except Exception as e:
+        logger.error(f"启动批量烧录失败: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/stats', methods=['GET'])
+def api_stats():
+    """字幕库统计面板（v1.3.0）：数量/时长/格式分布/任务概况/存储占用。"""
+    try:
+        subs = []
+        for filename in os.listdir(app.config['SUBTITLE_FOLDER']):
+            fp = os.path.join(app.config['SUBTITLE_FOLDER'], filename)
+            if not os.path.isfile(fp):
+                continue
+            ext = os.path.splitext(filename)[1].lower()
+            if filename.lower().endswith(('.words.json', '.recognition.json', '.translation.json', '.speakers.json')):
+                continue
+            if ext in SUBTITLE_EXTENSIONS:
+                kind = 'subtitle'
+            elif ext in VIDEO_EXTENSIONS:
+                kind = 'video'
+            elif ext == '.md':
+                kind = 'doc'
+            else:
+                continue
+            subs.append({'filename': filename, 'ext': ext.lstrip('.'), 'kind': kind,
+                         'size': os.path.getsize(fp)})
+        fmt_count = {}
+        total_size = 0
+        video_size = 0
+        for x in subs:
+            fmt_count[x['ext']] = fmt_count.get(x['ext'], 0) + 1
+            total_size += x['size']
+            if x['kind'] == 'video':
+                video_size += x['size']
+        tasks_stats = {}
+        try:
+            tasks_stats = _get_task_queue().get_stats()
+        except Exception:
+            pass
+        def _dir_size(d):
+            total = 0
+            if os.path.isdir(d):
+                for root, _, files in os.walk(d):
+                    for n in files:
+                        try:
+                            total += os.path.getsize(os.path.join(root, n))
+                        except OSError:
+                            pass
+            return total
+        storage = {
+            'uploads': _dir_size(app.config['UPLOAD_FOLDER']),
+            'subtitles': _dir_size(app.config['SUBTITLE_FOLDER']),
+            'audio': _dir_size(app.config['AUDIO_FOLDER']),
+        }
+        return jsonify({'success': True, 'stats': {
+            'subtitle_count': fmt_count.get('srt', 0) + fmt_count.get('ass', 0) + fmt_count.get('vtt', 0) + fmt_count.get('json', 0) + fmt_count.get('txt', 0),
+            'video_count': fmt_count.get('mp4', 0) + fmt_count.get('mkv', 0),
+            'doc_count': fmt_count.get('md', 0),
+            'format_count': fmt_count,
+            'total_size': total_size,
+            'video_size': video_size,
+            'tasks': tasks_stats,
+            'storage': storage,
+        }})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/cleanup', methods=['POST'])
 def api_cleanup():
     """手动触发清理旧文件"""
@@ -3238,12 +3892,23 @@ def api_summary():
         if len(transcript) > 40000:
             transcript = transcript[:40000] + '\n…（过长已截断）'
 
-        system = (
-            '你是专业的视频内容分析师。根据带时间戳的转写稿输出中文 Markdown，结构固定为：\n'
-            '# 视频内容总结\n## 一句话摘要\n（50字以内）\n## 核心要点\n（3-8条，每条一行）\n'
-            '## 章节时间线\n（按 [mm:ss] 给出 3-10 个章节：`[mm:ss] 章节名 — 一句话说明`）\n'
-            '只输出 Markdown 正文，不要寒暄和解释。'
-        )
+        mode = (data.get('mode') or 'summary').strip()
+        if mode == 'minutes':
+            system = (
+                '你是专业的会议/访谈记录员。根据带时间戳的转写稿输出中文 Markdown 会议纪要，结构固定为：\n'
+                '# 会议纪要\n## 会议概要\n（主题/参与人/时长，2-3句）\n## 讨论要点\n'
+                '（按议题分组，每条注明发言人，引用原话时保留 [mm:ss] 时间戳）\n'
+                '## 结论与决定\n（逐条列出）\n## 待办事项\n（- [ ] 格式，注明负责人与时间点）\n'
+                '发言人信息来自转写稿中的【姓名】前缀；若转写稿没有说话人标记则省略发言人。\n'
+                '只输出 Markdown 正文，不要寒暄和解释。'
+            )
+        else:
+            system = (
+                '你是专业的视频内容分析师。根据带时间戳的转写稿输出中文 Markdown，结构固定为：\n'
+                '# 视频内容总结\n## 一句话摘要\n（50字以内）\n## 核心要点\n（3-8条，每条一行）\n'
+                '## 章节时间线\n（按 [mm:ss] 给出 3-10 个章节：`[mm:ss] 章节名 — 一句话说明`）\n'
+                '只输出 Markdown 正文，不要寒暄和解释。'
+            )
         t0 = time.monotonic()
         summary_md = llm_chat(cfg, [
             {'role': 'system', 'content': system},
@@ -3252,7 +3917,7 @@ def api_summary():
         elapsed = int((time.monotonic() - t0) * 1000)
 
         stem = os.path.splitext(os.path.basename(filename))[0]
-        out_name = f'{stem}.总结.md'
+        out_name = f'{stem}.纪要.md' if mode == 'minutes' else f'{stem}.总结.md'
         out_path = os.path.join(app.config['SUBTITLE_FOLDER'], out_name)
         if not _is_safe_basename(out_name):
             return jsonify({'success': False, 'error': '输出文件名非法'}), 400
@@ -4417,6 +5082,12 @@ def queue_stream():
         'X-Accel-Buffering': 'no',
     })
 
+
+# 监控自动字幕线程（v1.2.0）：仅当配置启用时启动
+try:
+    _start_watch_thread()
+except Exception as _we:
+    logger.error(f"监控线程启动失败: {_we}")
 
 if __name__ == '__main__':
     from waitress import serve

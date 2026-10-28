@@ -905,6 +905,12 @@ function renderSubtitles(subtitles) {
                             <button class="btn btn-ghost btn-small subtitle-action" data-action="speakers" data-filename="${filenameAttr}" title="说话人命名">
                                 说话人
                             </button>
+                            <button class="btn btn-ghost btn-small subtitle-action" data-action="clip" data-filename="${filenameAttr}" title="按时间段导出视频片段">
+                                片段
+                            </button>
+                            <button class="btn btn-ghost btn-small subtitle-action" data-action="burnbatch" data-filename="" title="批量烧录多份字幕">
+                                批量烧录
+                            </button>
                             <button class="btn btn-ghost btn-small subtitle-action" data-action="rename" data-filename="${filenameAttr}">
                                 重命名
                             </button>
@@ -940,6 +946,8 @@ function renderSubtitles(subtitles) {
             else if (action === 'minutes') summarizeSubtitle(filename, 'minutes');
             else if (action === 'push') pushSubtitle(filename);
             else if (action === 'speakers') speakerNaming(filename);
+            else if (action === 'clip') clipExport(filename);
+            else if (action === 'burnbatch') showBurnBatch();
             else if (action === 'rename') renameSubtitle(filename);
             else if (action === 'delete') deleteSubtitle(filename);
         });
@@ -4423,6 +4431,161 @@ async function saveAsrSettings() {
             showToast(r.error || '保存失败', 'error');
         }
     } catch (e) { showToast('保存失败: ' + e.message, 'error'); }
+}
+
+// ---- 片段导出（v1.3.0）----
+function clipExport(mediaFilename) {
+    var modal = document.getElementById('clipModal');
+    if (!modal) return;
+    document.getElementById('clipFileName').textContent = mediaFilename;
+    document.getElementById('clipStart').value = 0;
+    document.getElementById('clipEnd').value = '';
+    document.getElementById('clipAccurate').checked = false;
+    modal.dataset.filename = mediaFilename;
+    modal.style.display = 'flex';
+}
+
+function closeClipModal() {
+    var m = document.getElementById('clipModal');
+    if (m) m.style.display = 'none';
+}
+
+async function doClipExport() {
+    var modal = document.getElementById('clipModal');
+    var fn = modal.dataset.filename;
+    var start = parseFloat(document.getElementById('clipStart').value) || 0;
+    var endRaw = document.getElementById('clipEnd').value.trim();
+    var accurate = document.getElementById('clipAccurate').checked;
+    var body = { filename: fn, start: start, accurate: accurate };
+    if (endRaw !== '') {
+        var end = parseFloat(endRaw);
+        if (isNaN(end) || end <= start) { showToast('结束时间必须大于开始时间', 'error'); return; }
+        body.end = end;
+    }
+    try {
+        var resp = await apiFetch('/api/clip-export', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        var r = await resp.json();
+        if (r.success) {
+            showToast('片段导出已启动', 'info');
+            closeClipModal();
+            var poll = setInterval(async function() {
+                try {
+                    var sr = await (await apiFetch('/api/status/' + r.task_id)).json();
+                    var t = sr.task || sr;
+                    if (t.status === 'completed') {
+                        clearInterval(poll);
+                        showToast('片段导出完成: ' + (t.result || {}).output_file, 'success');
+                        loadSubtitles();
+                    } else if (t.status === 'failed') {
+                        clearInterval(poll);
+                        showToast('片段导出失败: ' + (t.error || ''), 'error');
+                    }
+                } catch (e) {}
+            }, 3000);
+        } else {
+            showToast(r.error || '启动失败', 'error');
+        }
+    } catch (e) { showToast('启动失败: ' + e.message, 'error'); }
+}
+
+// ---- 批量烧录（v1.3.0）----
+function showBurnBatch() {
+    var modal = document.getElementById('burnBatchModal');
+    if (!modal) return;
+    apiFetch('/api/subtitles')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var subs = (data.subtitles || []).filter(function(x) {
+                return x.kind === 'subtitle' && ['.srt', '.ass', '.vtt'].indexOf(x.filename.toLowerCase().split('.').pop().toLowerCase().replace(/\.$/, '')) !== -1 ||
+                       x.kind === 'subtitle' && /\.(srt|ass|vtt)$/i.test(x.filename);
+            });
+            subs = subs.filter(function(x) { return /\.(srt|ass|vtt)$/i.test(x.filename); });
+            if (!subs.length) {
+                document.getElementById('burnBatchList').innerHTML = '<p style="color:var(--text-secondary,#98A2B3)">没有可烧录的字幕文件</p>';
+                return;
+            }
+            var html = '';
+            subs.forEach(function(x) {
+                html += '<label style="display:flex;align-items:center;gap:8px;padding:5px 4px">' +
+                    '<input type="checkbox" class="burnbatch-chk" value="' + escapeAttr(x.filename) + '" checked>' +
+                    '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(x.filename) + '</span></label>';
+            });
+            document.getElementById('burnBatchList').innerHTML = html;
+        })
+        .catch(function(e) { showToast('加载字幕列表失败: ' + e.message, 'error'); });
+    modal.style.display = 'flex';
+}
+
+function closeBurnBatchModal() {
+    var m = document.getElementById('burnBatchModal');
+    if (m) m.style.display = 'none';
+}
+
+async function doBurnBatch() {
+    var files = [...document.querySelectorAll('#burnBatchList .burnbatch-chk:checked')].map(function(c) { return c.value; });
+    if (!files.length) { showToast('请至少勾选一份字幕', 'error'); return; }
+    try {
+        var resp = await apiFetch('/api/burn-batch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filenames: files, style: {} })
+        });
+        var r = await resp.json();
+        if (r.success) {
+            showToast('批量烧录已启动（' + files.length + ' 份）', 'info');
+            closeBurnBatchModal();
+            var tid = r.task_id;
+            var poll = setInterval(async function() {
+                try {
+                    var sr = await (await apiFetch('/api/status/' + tid)).json();
+                    var t = sr.task || sr;
+                    if (t.status === 'completed') {
+                        clearInterval(poll);
+                        var res = t.result || {};
+                        showToast('批量烧录完成: 成功 ' + (res.ok_count || 0) + ' 失败 ' + (res.fail_count || 0), res.fail_count ? 'error' : 'success');
+                        loadSubtitles();
+                    } else if (t.status === 'failed') {
+                        clearInterval(poll);
+                        showToast('批量烧录失败: ' + (t.error || ''), 'error');
+                    }
+                } catch (e) {}
+            }, 5000);
+        } else {
+            showToast(r.error || '启动失败', 'error');
+        }
+    } catch (e) { showToast('启动失败: ' + e.message, 'error'); }
+}
+
+// ---- 统计面板（v1.3.0）----
+async function showStatsPanel() {
+    try {
+        var resp = await apiFetch('/api/stats');
+        var data = await resp.json();
+        if (!data.success) { showToast(data.error || '加载失败', 'error'); return; }
+        var st = data.stats;
+        var gb = function(n) { return (n / 1073741824).toFixed(2) + ' GB'; };
+        var lines = [];
+        lines.push('=== 字幕库 ===');
+        lines.push('字幕文件: ' + st.subtitle_count + ' · 成片: ' + st.video_count + ' · 文档: ' + (st.doc_count || 0));
+        lines.push('格式分布: ' + Object.keys(st.format_count || {}).map(function(k) { return k + '×' + st.format_count[k]; }).join(', '));
+        lines.push('字幕目录合计: ' + gb(st.total_size || 0) + '（成片 ' + gb(st.video_size || 0) + '）');
+        if (st.tasks) {
+            lines.push('');
+            lines.push('=== 任务 ===');
+            lines.push('完成 ' + (st.tasks.completed || 0) + ' · 总计 ' + (st.tasks.total || 0));
+        }
+        if (st.storage) {
+            lines.push('');
+            lines.push('=== 存储占用 ===');
+            Object.keys(st.storage).forEach(function(k) { lines.push(k + ': ' + gb(st.storage[k] || 0)); });
+        }
+        writeToolsOutput(lines.join('\n'));
+        showToast('统计已生成', 'info');
+    } catch (e) { showToast('统计失败: ' + e.message, 'error'); }
 }
 
 // ---- 双语对照质检 ----
